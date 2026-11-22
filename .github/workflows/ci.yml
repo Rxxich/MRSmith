@@ -3,7 +3,16 @@ name: ci
 on:
   push:
     branches: [main]
+    # Documentation alone does not need a test run.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "examples/**"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "examples/**"
   schedule:
     - cron: "17 5 * * 1" # weekly: catch newly published CVEs in dependencies
 
