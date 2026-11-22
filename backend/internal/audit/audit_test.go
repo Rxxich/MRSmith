@@ -52,7 +52,7 @@ func TestLargeAuditIsFast(t *testing.T) {
 	if rep.Totals.Covered != 50_000+20_000 {
 		t.Fatalf("covered = %d", rep.Totals.Covered)
 	}
-	if took > 10*time.Second {
+	if took > 10*time.Second && !raceEnabled {
 		t.Fatalf("too slow: %s", took)
 	}
 }
