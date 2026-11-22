@@ -15,7 +15,8 @@ import (
 
 const token = "123456789:AAbbccddeeffgghhiijjkkllmmnnooppqq"
 
-func fakeAPI(t *testing.T, handle func(chat int64, text string) (int, string)) (*Telegram, *[]string) {
+// fakeAPI answers sendMessage with handle; the returned func counts calls.
+func fakeAPI(t *testing.T, handle func(chat int64, text string) (int, string)) (*Telegram, func() int) {
 	var mu sync.Mutex
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,8 +35,8 @@ func fakeAPI(t *testing.T, handle func(chat int64, text string) (int, string)) (
 		}
 		mu.Lock()
 		got = append(got, in.Text)
-		mu.Unlock()
 		code, body := handle(in.ChatID, in.Text)
+		mu.Unlock()
 		w.WriteHeader(code)
 		io.WriteString(w, body)
 	}))
@@ -43,7 +44,11 @@ func fakeAPI(t *testing.T, handle func(chat int64, text string) (int, string)) (
 	tg := NewTelegram(token, []int64{42}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	tg.base = srv.URL
 	tg.gap = time.Millisecond
-	return tg, &got
+	return tg, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got)
+	}
 }
 
 func TestSendAndRetry(t *testing.T) {
@@ -58,8 +63,8 @@ func TestSendAndRetry(t *testing.T) {
 	if err := tg.Send(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*got) != 2 {
-		t.Fatalf("%d calls, want a retry after 429", len(*got))
+	if n := got(); n != 2 {
+		t.Fatalf("%d calls, want a retry after 429", n)
 	}
 }
 
@@ -112,10 +117,10 @@ func TestQueueDelivers(t *testing.T) {
 	tg.Enqueue("two")
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(*got) == 2 {
+		if got() == 2 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("delivered %d of 2", len(*got))
+	t.Fatalf("delivered %d of 2", got())
 }

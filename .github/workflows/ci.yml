@@ -14,13 +14,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -32,9 +32,18 @@ jobs:
           npm run build
       - name: Backend tests
         working-directory: backend
+        shell: bash
         run: |
           go vet ./...
-          go test -race -count=1 ./...
+          set +e
+          go test -race -count=1 ./... 2>&1 | tee test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface failures as annotations: they are readable without signing in.
+            grep -E -- '^(--- FAIL|FAIL|panic:)|DATA RACE|_test\.go:[0-9]+:|\.go:[0-9]+ \+0x' test.log | head -40 |
+              while IFS= read -r line; do echo "::error title=go test::${line}"; done
+          fi
+          exit "$status"
       - name: govulncheck
         working-directory: backend
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
