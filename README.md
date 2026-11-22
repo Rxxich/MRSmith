@@ -124,7 +124,14 @@ rules.example.com {
 
 ### Рядом с панелью Remnawave
 
-Compose панели Remnawave создаёт свою сеть `remnawave-network`. MRSmith подключается к ней вместо того, чтобы открывать порт. Тогда nginx панели видит его по имени `mrsmith:8080`. Понадобится отдельный поддомен, например `rules.example.com`.
+Понадобится отдельный поддомен, например `rules.example.com`. Дальше всё зависит от того, как запущен nginx панели. Посмотрите на её upstream в `nginx.conf`:
+
+- `server remnawave:3000;` — nginx работает в сети Docker `remnawave-network` и видит контейнеры по именам. Вам подходит вариант «nginx в сети remnawave-network».
+- `server 127.0.0.1:3000;` — nginx запущен с `network_mode: host`, имён контейнеров он не знает. Вам подходит вариант «nginx с network_mode: host». Если в этом случае указать `mrsmith:8080`, `nginx -t` ответит `host not found in upstream "mrsmith:8080"`.
+
+#### nginx в сети remnawave-network
+
+Compose панели Remnawave создаёт свою сеть `remnawave-network`. MRSmith подключается к ней вместо того, чтобы открывать порт, и nginx видит его по имени `mrsmith:8080`.
 
 На шаге 2 возьмите compose-файл для этого случая:
 
@@ -187,6 +194,26 @@ docker exec remnawave-nginx nginx -t && docker exec remnawave-nginx nginx -s rel
 ```
 
 Если у Remnawave вместо nginx стоит Caddy, хватит блока `rules.example.com { reverse_proxy mrsmith:8080 }`.
+
+#### nginx с network_mode: host
+
+Возьмите обычный compose-файл из шага 2, без `networks`: он публикует панель на `127.0.0.1:8090`, и nginx в сети хоста дойдёт до неё так же, как до самой панели по `127.0.0.1:3000`.
+
+```bash
+curl -o docker-compose.yml https://raw.githubusercontent.com/Rxxich/MRSmith/refs/heads/main/docker-compose.yml && curl -o .env https://raw.githubusercontent.com/Rxxich/MRSmith/refs/heads/main/.env.sample
+```
+
+В `nginx.conf` панели отличается только upstream:
+
+```nginx
+upstream mrsmith {
+    server 127.0.0.1:8090;
+}
+```
+
+Блок `server` для поддомена — тот же, что выше. Порт `8090` открыт только на `127.0.0.1`, снаружи он не виден. Если `8090` уже занят, поменяйте левую часть в `ports` compose-файла (например `127.0.0.1:8091:8080`) и upstream вместе с ней.
+
+Частая ошибка при добавлении блока — лишняя закрывающая скобка `}` после `server`. `nginx -t` укажет на неё строкой `unexpected "}"`.
 
 ## Подключение в mihomo
 

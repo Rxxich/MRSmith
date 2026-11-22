@@ -3,6 +3,10 @@
 Версии идут по схеме 1.0.0 → 1.0.1 → 1.0.2: каждое изменение поднимает последнюю цифру.
 Номер хранится в `backend/internal/version/VERSION` (и в `frontend/package.json`), поднимается командой `scripts/bump-version.sh X.Y.Z`.
 
+## 1.0.14
+
+- README: установка рядом с Remnawave разделена на два варианта — nginx в сети `remnawave-network` (upstream `mrsmith:8080`) и nginx с `network_mode: host` (upstream `127.0.0.1:8090`, обычный compose-файл). Описано, как понять, какой у вас, и что значит ошибка `host not found in upstream "mrsmith:8080"`.
+
 ## 1.0.13
 
 - Установка как у Remnawave: на сервере нужны только `docker-compose.yml` и `.env`, образ скачивается из `ghcr.io`. Оба файла лежат в корне репозитория (`.env.sample` — шаблон с описанием всех переменных) и скачиваются одной командой `curl`.
