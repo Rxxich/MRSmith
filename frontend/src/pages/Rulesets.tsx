@@ -2,16 +2,18 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { IconListDetails, IconLock, IconPlus, IconRefresh, IconSearch } from '@tabler/icons-react'
 import { api, errorText } from '../lib/api'
-import { DOWNLOADS, count, counterTitle, fmtNum, rulesetDownloads } from '../lib/format'
+import { useMe } from '../app/auth'
+import { DOWNLOADS, count, counterTitle, fmtNum, rulesetDownloads, rulesetLink } from '../lib/format'
 import { useAsync, useInterval, useNow, useTitle } from '../lib/hooks'
 import type { Ruleset, RulesetEvent } from '../lib/types'
-import { BehaviorTag, Button, Empty, Input, Loading, Notice } from '../ui/core'
+import { BehaviorTag, Button, CopyChip, Empty, Input, Loading, Notice } from '../ui/core'
 import { useOverlay } from '../ui/overlay'
 import { Temper } from '../ui/temper'
 
 export function Rulesets() {
   useTitle('Наборы правил')
   useNow()
+  const me = useMe()
   const { toast } = useOverlay()
   const list = useAsync(() => api.get<Ruleset[]>('rulesets'), [])
   const [q, setQ] = useState('')
@@ -95,16 +97,19 @@ export function Rulesets() {
             </div>
             {items.map((rs) => (
               <div key={rs.id} className="rs-row">
-                <Link to={`/rulesets/${rs.id}`} className="truncate plain-link">
-                  <div className="rs-name truncate">
-                    {rs.name} {rs.private && <IconLock size={13} className="muted" aria-label="приватный" />}
+                <div className="rs-title">
+                  <Link to={`/rulesets/${rs.id}`} className="truncate plain-link">
+                    <div className="rs-name truncate">
+                      {rs.name} {rs.private && <IconLock size={13} className="muted" aria-label="приватный" />}
+                    </div>
+                  </Link>
+                  <div className="small rs-slug mono rs-links">
+                    <span>/r/{rs.slug}.</span>
+                    {rs.formats.map((f) => (
+                      <CopyChip key={f} text={rulesetLink(me, rs, f)} label={f} title={`Скопировать ссылку на ${rs.slug}.${f}`} />
+                    ))}
                   </div>
-                  <div className="small rs-slug truncate mono">
-                    /r/{rs.slug}.{'{'}
-                    {rs.formats.join(',')}
-                    {'}'}
-                  </div>
-                </Link>
+                </div>
                 <div>
                   <BehaviorTag behavior={rs.state.behavior || rs.behavior} />
                 </div>

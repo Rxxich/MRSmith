@@ -44,10 +44,23 @@ func (s *Server) handleRulesets(w http.ResponseWriter, r *http.Request) error {
 	}
 	out := make([]rulesetView, 0, len(list))
 	for i := range list {
-		out = append(out, s.view(&list[i]))
+		out = append(out, s.view(listed(&list[i])))
 	}
 	writeJSON(w, http.StatusOK, out)
 	return nil
+}
+
+// listed drops what only the page of one set needs: manual additions and
+// exclusions (up to tens of thousands of lines), rules that still match and
+// samples of unreadable lines. The list stays small however big the sets are.
+func listed(rs *rulesets.Ruleset) *rulesets.Ruleset {
+	rs.Include, rs.Exclude = nil, nil
+	rs.State.Still = nil
+	rs.State.InputHash = ""
+	for i := range rs.Sources {
+		rs.Sources[i].State.InvalidSample = nil
+	}
+	return rs
 }
 
 func (s *Server) handleRuleset(w http.ResponseWriter, r *http.Request) error {
@@ -161,6 +174,26 @@ func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func (s *Server) handleReplaceEntry(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r)
+	if err != nil {
+		return err
+	}
+	var in struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := decodeJSON(w, r, &in, 8<<10); err != nil {
+		return err
+	}
+	rs, err := s.rs.ReplaceEntry(r.Context(), id, strings.TrimSpace(in.From), strings.TrimSpace(in.To))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, s.view(rs))
+	return nil
+}
+
 func (s *Server) handleEditEntries(w http.ResponseWriter, r *http.Request) error {
 	id, err := pathID(r)
 	if err != nil {
@@ -214,13 +247,15 @@ func (s *Server) handleClearOverrides(w http.ResponseWriter, r *http.Request) er
 		return err
 	}
 	var in struct {
-		Include []string `json:"include"`
-		Exclude []string `json:"exclude"`
+		Include    []string `json:"include"`
+		Exclude    []string `json:"exclude"`
+		AllInclude bool     `json:"allInclude"`
+		AllExclude bool     `json:"allExclude"`
 	}
 	if err := decodeJSON(w, r, &in, 4<<20); err != nil {
 		return err
 	}
-	rs, err := s.rs.ClearOverrides(r.Context(), id, in.Include, in.Exclude)
+	rs, err := s.rs.ClearOverrides(r.Context(), id, in.Include, in.Exclude, in.AllInclude, in.AllExclude)
 	if err != nil {
 		return err
 	}

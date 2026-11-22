@@ -2489,3 +2489,64 @@ label.btn {
 .mt-xs {
   margin-top: 4px;
 }
+
+/* ---- copy links in the list, rule editing ------------------------------- */
+
+.rs-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rs-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rs-links > span {
+  overflow-wrap: anywhere;
+}
+
+.copy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--seam-soft);
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--ash);
+  font: inherit;
+  cursor: pointer;
+}
+
+.copy-chip:hover {
+  color: var(--straw);
+  border-color: var(--seam);
+}
+
+.copy-chip.done {
+  color: var(--patina);
+}
+
+.entry-edit {
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.entry-edit .input {
+  flex: 1 1 auto;
+  height: 28px;
+}
+
+/* Touch screens have no hover: keep the row buttons visible. */
+@media (hover: none) {
+  .entry .del {
+    opacity: 1;
+  }
+}

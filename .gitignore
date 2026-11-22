@@ -8,3 +8,4 @@ backend/internal/webui/dist/
 /mrsmith
 .claude/
 *.tgz
+*.tsbuildinfo

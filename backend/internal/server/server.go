@@ -216,6 +216,7 @@ func (s *Server) routes() {
 	a.HandleFunc("POST /api/rulesets/{id}/refresh", s.authed(s.handleRefreshRuleset))
 	a.HandleFunc("GET /api/rulesets/{id}/entries", s.authed(s.handleEntries))
 	a.HandleFunc("POST /api/rulesets/{id}/entries", s.authed(s.handleEditEntries))
+	a.HandleFunc("POST /api/rulesets/{id}/entries/replace", s.authed(s.handleReplaceEntry))
 	a.HandleFunc("POST /api/rulesets/{id}/overrides/clear", s.authed(s.handleClearOverrides))
 	a.HandleFunc("POST /api/rulesets/{id}/exclude/preview", s.authed(s.handlePreviewExclusion))
 	a.HandleFunc("POST /api/rulesets/{id}/token", s.authed(s.handleRotateToken))

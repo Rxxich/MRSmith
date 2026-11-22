@@ -90,7 +90,9 @@ type State struct {
 	Still        []rules.StillMatched              `json:"still,omitempty"`
 	Outputs      map[rules.OutputFormat]OutputInfo `json:"outputs,omitempty"`
 	Hash         string                            `json:"hash,omitempty"`
-	DurationMs   int64                             `json:"durationMs"`
+	// InputHash fingerprints what the last build was made from.
+	InputHash  string `json:"inputHash,omitempty"`
+	DurationMs int64  `json:"durationMs"`
 }
 
 type Ruleset struct {

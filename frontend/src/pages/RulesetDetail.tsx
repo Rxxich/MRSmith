@@ -9,6 +9,7 @@ import {
   IconDownload,
   IconLink,
   IconLock,
+  IconPencil,
   IconPlus,
   IconRefresh,
   IconSearch,
@@ -315,6 +316,8 @@ function Entries({ rs, version, onChanged }: { rs: Ruleset; version: number; onC
   const [add, setAdd] = useState('')
   const [busy, setBusy] = useState(false)
   const [excluding, setExcluding] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
   useEffect(() => setOffset(0), [dq])
   const data = useAsync(
     () => api.get<{ total: number; items: string[] }>(`rulesets/${rs.id}/entries?q=${encodeURIComponent(dq)}&offset=${offset}&limit=${PAGE}`),
@@ -338,6 +341,32 @@ function Entries({ rs, version, onChanged }: { rs: Ruleset; version: number; onC
     setExcluding(null)
     onChanged(updated)
     await data.reload()
+  }
+
+  const startEdit = (rule: string) => {
+    setEditing(rule)
+    setDraft(rule)
+  }
+
+  const saveEdit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!editing) return
+    const to = draft.trim()
+    if (!to || to === editing) {
+      setEditing(null)
+      return
+    }
+    setBusy(true)
+    try {
+      onChanged(await api.post<Ruleset>(`rulesets/${rs.id}/entries/replace`, { from: editing, to }))
+      toast(`${editing} заменено на ${to}`)
+      setEditing(null)
+      await data.reload()
+    } catch (err) {
+      toast(errorText(err), 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const submitAdd = async (e: FormEvent) => {
@@ -375,7 +404,25 @@ function Entries({ rs, version, onChanged }: { rs: Ruleset; version: number; onC
       ) : (
         <>
           <div className="entries">
-            {data.data.items.map((e) => (
+            {data.data.items.map((e) =>
+              editing === e ? (
+                <form key={e} className="entry entry-edit" onSubmit={saveEdit}>
+                  <Input
+                    mono
+                    autoFocus
+                    value={draft}
+                    onChange={(ev) => setDraft(ev.target.value)}
+                    onKeyDown={(ev) => ev.key === 'Escape' && setEditing(null)}
+                    aria-label={`Новое значение для ${e}`}
+                  />
+                  <Button type="submit" size="sm" variant="primary" busy={busy} disabled={!draft.trim()}>
+                    Сохранить
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                    Отмена
+                  </Button>
+                </form>
+              ) : (
               <div key={e} className="entry">
                 <span className="entry-text">
                   <RuleText rule={e} />
@@ -389,13 +436,25 @@ function Entries({ rs, version, onChanged }: { rs: Ruleset; version: number; onC
                   iconOnly
                   className="del"
                   disabled={busy}
+                  onClick={() => startEdit(e)}
+                  title="Изменить правило"
+                  aria-label={`Изменить ${e}`}
+                  icon={<IconPencil size={14} />}
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  iconOnly
+                  className="del"
+                  disabled={busy}
                   onClick={() => setExcluding(e)}
                   title="Исключить из набора"
                   aria-label={`Исключить ${e}`}
                   icon={<IconX size={14} />}
                 />
               </div>
-            ))}
+              ),
+            )}
           </div>
           <div className="pager">
             <span>
@@ -483,10 +542,28 @@ function SourcesTab({ rs }: { rs: Ruleset }) {
 // ---- overrides ----------------------------------------------------------
 
 function Overrides({ rs, onChanged }: { rs: Ruleset; onChanged: (r: Ruleset) => void }) {
-  const { toast } = useOverlay()
+  const { toast, confirm } = useOverlay()
   const [busy, setBusy] = useState(false)
   const [typed, setTyped] = useState('')
   const [excluding, setExcluding] = useState<string | null>(null)
+  const clearAll = async (what: 'include' | 'exclude') => {
+    const n = what === 'include' ? rs.include.length : rs.exclude.length
+    const ok = await confirm(
+      what === 'include'
+        ? { title: `Отменить ${count(n, ['добавленное правило', 'добавленных правила', 'добавленных правил'])}?`, body: 'Правила, добавленные вручную, уйдут из набора. Правила из источников останутся.', confirm: 'Отменить все' }
+        : { title: `Вернуть ${count(n, ['исключённое правило', 'исключённых правила', 'исключённых правил'])}?`, body: 'Все исключения снимутся, и правила из источников снова попадут в набор.', confirm: 'Вернуть все' },
+    )
+    if (!ok) return
+    setBusy(true)
+    try {
+      onChanged(await api.post<Ruleset>(`rulesets/${rs.id}/overrides/clear`, what === 'include' ? { allInclude: true } : { allExclude: true }))
+      toast(what === 'include' ? 'Ручные добавления отменены' : 'Все исключения сняты')
+    } catch (e) {
+      toast(errorText(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
   const clear = async (include: string[], exclude: string[]) => {
     setBusy(true)
     try {
@@ -518,7 +595,14 @@ function Overrides({ rs, onChanged }: { rs: Ruleset; onChanged: (r: Ruleset) => 
         <section className="panel">
           <div className="panel-head">
             <h2>Добавлено вручную</h2>
-            <span className="muted small">{fmtNum(rs.include.length)}</span>
+            <div className="row-flex">
+              <span className="muted small">{fmtNum(rs.include.length)}</span>
+              {rs.include.length > 1 && (
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => clearAll('include')} icon={<IconArrowBackUp size={15} />}>
+                  Отменить все
+                </Button>
+              )}
+            </div>
           </div>
           {rs.include.length === 0 ? (
             <p className="panel-body muted">Правила, добавленные во вкладке «Содержимое», появятся здесь.</p>
@@ -538,7 +622,14 @@ function Overrides({ rs, onChanged }: { rs: Ruleset; onChanged: (r: Ruleset) => 
         <section className="panel">
           <div className="panel-head">
             <h2>Исключено</h2>
-            <span className="muted small">{fmtNum(rs.exclude.length)}</span>
+            <div className="row-flex">
+              <span className="muted small">{fmtNum(rs.exclude.length)}</span>
+              {rs.exclude.length > 1 && (
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => clearAll('exclude')} icon={<IconArrowBackUp size={15} />}>
+                  Вернуть все
+                </Button>
+              )}
+            </div>
           </div>
           {rs.exclude.length === 0 ? (
             <p className="panel-body muted">Исключённые правила появятся здесь. Они применяются при каждом обновлении источников.</p>

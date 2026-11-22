@@ -25,6 +25,7 @@ import (
 	"mrsmith/internal/rules"
 	"mrsmith/internal/storage"
 	"mrsmith/internal/store"
+	"mrsmith/internal/version"
 )
 
 type Manager struct {
@@ -44,6 +45,11 @@ type Manager struct {
 	cache   map[string]cachedLines
 
 	onChange func(rs *Ruleset, ev *Event)
+
+	// slugs maps a public file name to its set, so a download does not
+	// decode every set. nil means it must be rebuilt.
+	slugMu sync.RWMutex
+	slugs  map[string]string
 }
 
 // OnChange registers fn to run after a rebuild from sources (by schedule or
@@ -110,16 +116,38 @@ func (m *Manager) Get(id string) (*Ruleset, error) {
 }
 
 func (m *Manager) BySlug(slug string) (*Ruleset, error) {
-	list, err := m.List()
-	if err != nil {
-		return nil, err
-	}
-	for i := range list {
-		if list[i].Slug == slug {
-			return &list[i], nil
+	m.slugMu.RLock()
+	idx := m.slugs
+	m.slugMu.RUnlock()
+	if idx == nil {
+		list, err := m.List()
+		if err != nil {
+			return nil, err
 		}
+		idx = make(map[string]string, len(list))
+		for _, rs := range list {
+			idx[rs.Slug] = rs.ID
+		}
+		m.slugMu.Lock()
+		m.slugs = idx
+		m.slugMu.Unlock()
 	}
-	return nil, ErrNotFound
+	id, ok := idx[slug]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	rs, err := m.Get(id)
+	if err != nil || rs.Slug != slug {
+		m.forgetSlugs()
+		return nil, ErrNotFound
+	}
+	return rs, nil
+}
+
+func (m *Manager) forgetSlugs() {
+	m.slugMu.Lock()
+	m.slugs = nil
+	m.slugMu.Unlock()
 }
 
 func (m *Manager) slugTaken(slug, exceptID string) bool {
@@ -143,6 +171,7 @@ func (m *Manager) Create(in Input) (*Ruleset, error) {
 	if err := m.db.Put(store.Rulesets, rs.ID, rs); err != nil {
 		return nil, err
 	}
+	m.forgetSlugs()
 	return rs, nil
 }
 
@@ -175,6 +204,7 @@ func (m *Manager) Update(id string, in Input) (*Ruleset, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.forgetSlugs()
 	var gone []Source
 	for _, s := range old {
 		if slices.Contains(dropped, s.ID) {
@@ -336,6 +366,7 @@ func (m *Manager) Delete(id string) error {
 	if err := m.db.Delete(store.Rulesets, id); err != nil {
 		return err
 	}
+	m.forgetSlugs()
 	m.forgetSources(id, rs.Sources)
 	_, _ = m.storage.DeleteObjects(storage.DownloadsBucket, nil, []string{rs.Slug + "/"})
 	os.RemoveAll(filepath.Join(m.dir, "sources", id))
@@ -404,13 +435,30 @@ func (m *Manager) EditEntries(ctx context.Context, id string, add []string, remo
 	return rs, err
 }
 
-// ClearOverrides drops chosen manual additions and exclusions.
-func (m *Manager) ClearOverrides(ctx context.Context, id string, include, exclude []string) (*Ruleset, error) {
+// ClearOverrides drops chosen manual additions and exclusions; allInclude
+// and allExclude drop every one of them.
+func (m *Manager) ClearOverrides(ctx context.Context, id string, include, exclude []string, allInclude, allExclude bool) (*Ruleset, error) {
+	inc := make(map[string]bool, len(include))
+	for _, x := range include {
+		inc[x] = true
+	}
+	exc := make(map[string]bool, len(exclude))
+	for _, x := range exclude {
+		exc[x] = true
+	}
 	l := m.lock(id)
 	l.Lock()
 	_, err := store.Modify(m.db, store.Rulesets, id, func(rs *Ruleset) error {
-		rs.Include = slices.DeleteFunc(rs.Include, func(x string) bool { return slices.Contains(include, x) })
-		rs.Exclude = slices.DeleteFunc(rs.Exclude, func(x rules.Exclusion) bool { return slices.Contains(exclude, x.Rule) })
+		if allInclude {
+			rs.Include = []string{}
+		} else {
+			rs.Include = slices.DeleteFunc(rs.Include, func(x string) bool { return inc[x] })
+		}
+		if allExclude {
+			rs.Exclude = []rules.Exclusion{}
+		} else {
+			rs.Exclude = slices.DeleteFunc(rs.Exclude, func(x rules.Exclusion) bool { return exc[x.Rule] })
+		}
 		rs.UpdatedAt = time.Now().UTC()
 		return nil
 	})
@@ -423,6 +471,67 @@ func (m *Manager) ClearOverrides(ctx context.Context, id string, include, exclud
 	}
 	rs, _, err := m.Refresh(ctx, id, false, "edit")
 	return rs, err
+}
+
+// ReplaceEntry changes one rule of the built set into another. A rule added
+// by hand is rewritten in place; a rule that comes from a source is excluded
+// ("only this line") and the new one is added by hand.
+func (m *Manager) ReplaceEntry(ctx context.Context, id, from, to string) (*Ruleset, error) {
+	norm := func(s, what string) (string, error) {
+		if len(s) > maxEntryLen {
+			return "", invalid("%s: слишком длинная строка", what)
+		}
+		ok, bad := rules.NormalizeEntries([]string{s})
+		if len(bad) > 0 || len(ok) != 1 {
+			return "", invalid("%s: не удалось разобрать %q", what, s)
+		}
+		return ok[0], nil
+	}
+	oldRule, err := norm(from, "старое правило")
+	if err != nil {
+		return nil, err
+	}
+	newRule, err := norm(to, "новое правило")
+	if err != nil {
+		return nil, err
+	}
+	if oldRule == newRule {
+		return nil, invalid("правило не изменилось")
+	}
+	manual := false
+	l := m.lock(id)
+	l.Lock()
+	_, err = store.Modify(m.db, store.Rulesets, id, func(rs *Ruleset) error {
+		rs.Exclude = slices.DeleteFunc(rs.Exclude, func(x rules.Exclusion) bool { return x.Rule == newRule })
+		if i := slices.Index(rs.Include, oldRule); i >= 0 {
+			manual = true
+			rs.Include = slices.Delete(rs.Include, i, i+1)
+		} else {
+			rs.Exclude = slices.DeleteFunc(rs.Exclude, func(x rules.Exclusion) bool { return x.Rule == oldRule })
+			rs.Exclude = append(rs.Exclude, rules.Exclusion{Rule: oldRule, Mode: rules.ExcludeExact})
+		}
+		if !slices.Contains(rs.Include, newRule) {
+			rs.Include = append(rs.Include, newRule)
+		}
+		rs.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+	l.Unlock()
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	rs, _, err := m.Refresh(ctx, id, false, "edit")
+	if err != nil || !manual {
+		return rs, err
+	}
+	// A hand-added rule may also come from a source: then it is still there.
+	if slices.Contains(m.lines(rs), oldRule) {
+		return m.EditEntries(ctx, id, nil, []rules.Exclusion{{Rule: oldRule, Mode: rules.ExcludeExact}})
+	}
+	return rs, nil
 }
 
 // PreviewExclusion shows what an exclusion would remove from the current set.
@@ -499,42 +608,87 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 	started := time.Now()
 	ev := &Event{ID: store.TimeKey(started), Time: started.UTC(), RulesetID: rs.ID, RulesetName: rs.Name, Trigger: trigger}
 
-	combined := rules.NewSet()
 	states := map[string]SourceState{}
-	loaded := 0
 	usedKeys := map[string]bool{}
 	for _, src := range rs.Sources {
 		if k := src.State.CacheKey; k != "" && strings.HasPrefix(k, rs.Slug+"/") {
 			usedKeys[k] = true
 		}
 	}
+	type loadedSource struct {
+		src  Source
+		data []byte
+	}
+	var inputs []loadedSource
+	sourceFailed := false
 	for _, src := range rs.Sources {
 		data, st := m.loadSource(ctx, rs, src, forceFetch, usedKeys)
-		if data != nil {
-			pr, perr := rules.Parse(data, rules.ParseOptions{Format: src.Format, BareAsSuffix: src.BareAsSuffix})
-			if perr != nil {
-				st.Status, st.Error = StatusError, perr.Error()
-			} else {
-				loaded++
-				st.Rules = pr.Set.Len()
-				st.Invalid = pr.InvalidCount
-				st.InvalidSample = first(pr.Invalid, 10)
-				st.DetectedFormat = pr.Format
-				st.DetectedBehavior = pr.Behavior
-				combined.Merge(pr.Set)
-			}
-		}
 		states[src.ID] = st
+		inputs = append(inputs, loadedSource{src, data})
+		if st.Status == StatusError || data == nil {
+			sourceFailed = true
+		}
 	}
 
 	now := time.Now().UTC()
+	// The update timer follows the sources: only a run that checked them
+	// (schedule, refresh button, first build) moves it. Rebuilds after an
+	// edit reuse the downloaded copies and leave the timer alone.
+	touchTimer := func(r *Ruleset) {
+		if forceFetch || r.State.LastRunAt.IsZero() {
+			r.State.LastRunAt = now
+			r.State.NextRunAt = nextRun(now, r.IntervalMin)
+		}
+	}
+
+	// Nothing changed since the last build: same source contents, same
+	// settings, files in place. Skip parsing and rendering entirely.
+	inputHash := hashInputs(rs, states)
+	if !sourceFailed && inputHash == rs.State.InputHash && rs.State.Status == StatusOK && rs.State.Error == "" && m.outputsPresent(rs) {
+		saved, err := store.Modify(m.db, store.Rulesets, id, func(r *Ruleset) error {
+			mergeSourceStates(r, states)
+			touchTimer(r)
+			return nil
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		ev.Kind, ev.Total = "unchanged", saved.State.Count
+		if trigger != "schedule" {
+			m.addEvent(ev)
+		}
+		return saved, ev, nil
+	}
+
+	combined := rules.NewSet()
+	loaded := 0
+	for _, in := range inputs {
+		if in.data == nil {
+			continue
+		}
+		st := states[in.src.ID]
+		pr, perr := rules.Parse(in.data, rules.ParseOptions{Format: in.src.Format, BareAsSuffix: in.src.BareAsSuffix})
+		if perr != nil {
+			st.Status, st.Error = StatusError, perr.Error()
+		} else {
+			loaded++
+			st.Rules = pr.Set.Len()
+			st.Invalid = pr.InvalidCount
+			st.InvalidSample = first(pr.Invalid, 10)
+			st.DetectedFormat = pr.Format
+			st.DetectedBehavior = pr.Behavior
+			combined.Merge(pr.Set)
+		}
+		states[in.src.ID] = st
+	}
+	inputs = nil
+
 	fail := func(msg string) (*Ruleset, *Event, error) {
 		ev.Kind, ev.Message = "error", msg
 		saved, err := store.Modify(m.db, store.Rulesets, id, func(r *Ruleset) error {
 			mergeSourceStates(r, states)
 			r.State.Status, r.State.Error = StatusError, msg
-			r.State.LastRunAt = now
-			r.State.NextRunAt = nextRun(now, r.IntervalMin)
+			touchTimer(r)
 			r.State.DurationMs = time.Since(started).Milliseconds()
 			return nil
 		})
@@ -643,9 +797,10 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 		mergeSourceStates(r, states)
 		r.State = State{
 			Status:       StatusOK,
-			LastRunAt:    now,
+			LastRunAt:    r.State.LastRunAt,
 			LastChangeAt: r.State.LastChangeAt,
-			NextRunAt:    nextRun(now, r.IntervalMin),
+			NextRunAt:    r.State.NextRunAt,
+			InputHash:    inputHash,
 			Behavior:     built.Behavior,
 			Count:        built.Count(),
 			Domains:      len(built.Domains),
@@ -665,6 +820,7 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 		if changed {
 			r.State.LastChangeAt = now
 		}
+		touchTimer(r)
 		return nil
 	})
 	if err != nil {
@@ -680,6 +836,48 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 	m.log.Info("rule set built", "id", id, "slug", saved.Slug, "rules", built.Count(),
 		"added", len(added), "removed", len(removed), "trigger", trigger, "ms", saved.State.DurationMs)
 	return saved, ev, nil
+}
+
+// hashInputs fingerprints everything a build depends on: the content of each
+// source, the set's own rules and options, and the panel version (a new
+// version may build differently).
+func hashInputs(rs *Ruleset, states map[string]SourceState) string {
+	type src struct {
+		ID, SHA      string
+		Format       rules.InputFormat
+		BareAsSuffix bool
+	}
+	in := struct {
+		Version     string
+		Sources     []src
+		Include     []string
+		Exclude     []rules.Exclusion
+		Behavior    rules.Behavior
+		Formats     []rules.OutputFormat
+		Optimize    bool
+		AggregateIP bool
+		NoResolve   bool
+	}{version.Version, nil, rs.Include, rs.Exclude, rs.Behavior, rs.Formats, rs.Optimize, rs.AggregateIP, rs.NoResolve}
+	for _, s := range rs.Sources {
+		in.Sources = append(in.Sources, src{s.ID, states[s.ID].SHA256, s.Format, s.BareAsSuffix})
+	}
+	raw, _ := json.Marshal(in)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// outputsPresent reports whether every published file of a set is built.
+func (m *Manager) outputsPresent(rs *Ruleset) bool {
+	for _, f := range rs.Formats {
+		o, ok := rs.State.Outputs[f]
+		if !ok || o.Error != "" {
+			return false
+		}
+		if _, err := os.Stat(m.OutputPath(rs.ID, f)); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeSourceStates(r *Ruleset, states map[string]SourceState) {

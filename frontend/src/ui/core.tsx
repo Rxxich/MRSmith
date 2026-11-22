@@ -155,20 +155,45 @@ export function Empty({ icon, title, children, action }: { icon: ReactNode; titl
   )
 }
 
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
+}
+
+/** A small labelled button that copies text, e.g. one link of a rule set. */
+export function CopyChip({ text, label, title }: { text: string; label: string; title: string }) {
+  const [done, setDone] = useState(false)
+  return (
+    <button
+      type="button"
+      className={done ? 'copy-chip done' : 'copy-chip'}
+      title={done ? 'Ссылка скопирована' : title}
+      aria-label={done ? 'Ссылка скопирована' : title}
+      onClick={async () => {
+        await copyText(text)
+        setDone(true)
+        window.setTimeout(() => setDone(false), 1400)
+      }}
+    >
+      {label}
+      {done ? <IconCheck size={12} aria-hidden /> : <IconCopy size={12} aria-hidden />}
+    </button>
+  )
+}
+
 /** Copies text and briefly confirms with a check mark. */
 export function CopyButton({ text, label = 'Скопировать', size = 'sm' }: { text: string; label?: string; size?: 'sm' | 'md' }) {
   const [done, setDone] = useState(false)
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      ta.remove()
-    }
+    await copyText(text)
     setDone(true)
     window.setTimeout(() => setDone(false), 1400)
   }

@@ -84,6 +84,7 @@ export interface RulesetState {
   durationMs: number
 }
 
+/** GET /api/rulesets (the list) sends include and exclude as null and omits state.still. */
 export interface Ruleset {
   id: string
   name: string
