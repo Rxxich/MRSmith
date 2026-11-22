@@ -1,0 +1,13 @@
+# Caddy in front of MRSmith on the same server: HTTPS certificates are issued
+# automatically. MRSmith publishes itself on 127.0.0.1:8090.
+#   caddy reload --config /etc/caddy/Caddyfile
+# If Caddy runs in Docker on the same network as MRSmith, use mrsmith:8080.
+
+rules.example.com {
+	encode zstd gzip
+	request_body {
+		max_size 110MB
+	}
+	reverse_proxy 127.0.0.1:8090
+	header -Server
+}

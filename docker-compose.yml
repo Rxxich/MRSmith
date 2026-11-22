@@ -1,0 +1,31 @@
+# MRSmith. Put this file and .env into one folder (e.g. /opt/mrsmith), then:
+#   docker compose up -d
+# The panel listens on 127.0.0.1:8090 only; put a reverse proxy with HTTPS in
+# front of it (see examples/ in the repository).
+services:
+  mrsmith:
+    image: ghcr.io/rxxich/mrsmith:latest
+    container_name: mrsmith
+    hostname: mrsmith
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - mrsmith-data:/data
+    # Lets MRSMITH_GITHUB_PROXY / TELEGRAM_PROXY point at a proxy on this server.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  mrsmith-data:
+    name: mrsmith-data

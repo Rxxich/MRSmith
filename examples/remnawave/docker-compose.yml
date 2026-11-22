@@ -1,0 +1,35 @@
+# MRSmith next to a Remnawave panel. Instead of publishing a port it joins
+# remnawave-network, which the panel's compose creates, so the panel's nginx
+# (or Caddy) reaches it as http://mrsmith:8080.
+# Start Remnawave first: the network must exist.
+services:
+  mrsmith:
+    image: ghcr.io/rxxich/mrsmith:latest
+    container_name: mrsmith
+    hostname: mrsmith
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - mrsmith-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    networks:
+      - remnawave-network
+
+volumes:
+  mrsmith-data:
+    name: mrsmith-data
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    external: true

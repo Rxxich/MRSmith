@@ -1,0 +1,10 @@
+node_modules/
+frontend/dist/
+backend/internal/webui/dist/
+.localdata/
+.env
+.env.local
+*.exe
+/mrsmith
+.claude/
+*.tgz

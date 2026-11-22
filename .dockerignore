@@ -1,0 +1,14 @@
+.git
+.github
+.claude
+.localdata
+.env
+.env.*
+**/node_modules
+frontend/dist
+backend/internal/webui/dist
+examples
+scripts
+*.md
+docs
+docker-compose.yml
