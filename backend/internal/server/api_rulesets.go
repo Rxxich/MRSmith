@@ -80,7 +80,9 @@ func (s *Server) handleRuleset(w http.ResponseWriter, r *http.Request) error {
 
 // buildInBackground starts a rebuild that outlives the request.
 func (s *Server) buildInBackground(id string, force bool, trigger string) {
+	s.builds.Add(1)
 	go func() {
+		defer s.builds.Done()
 		ctx, cancel := context.WithTimeout(s.bg, 10*time.Minute)
 		defer cancel()
 		if _, _, err := s.rs.Refresh(ctx, id, force, trigger); err != nil && !errors.Is(err, rulesets.ErrInterrupted) {
@@ -88,6 +90,9 @@ func (s *Server) buildInBackground(id string, force bool, trigger string) {
 		}
 	}()
 }
+
+// WaitBuilds blocks until background builds started by requests end.
+func (s *Server) WaitBuilds() { s.builds.Wait() }
 
 func (s *Server) handleCreateRuleset(w http.ResponseWriter, r *http.Request) error {
 	var in rulesets.Input

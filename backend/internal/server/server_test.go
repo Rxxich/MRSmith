@@ -87,6 +87,9 @@ func newEnv(t *testing.T, panel string) *env {
 	}
 	hs := httptest.NewServer(s)
 	t.Cleanup(hs.Close)
+	// Runs before the temp dir is removed: a build still writing files
+	// would make the removal fail on Linux.
+	t.Cleanup(s.WaitBuilds)
 	jar, _ := cookiejar.New(nil)
 	return &env{t: t, srv: hs, client: &http.Client{Jar: jar}, mgr: mgr, cfg: cfg, user: user, pass: pass, bk: bk, bkDir: bkDir}
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"mrsmith/internal/apperr"
 	"mrsmith/internal/audit"
@@ -55,6 +56,7 @@ type Server struct {
 	api     *http.ServeMux
 	spa     *spa
 	handler http.Handler
+	builds  sync.WaitGroup // background builds started by requests
 }
 
 func New(d Deps) (*Server, error) {
