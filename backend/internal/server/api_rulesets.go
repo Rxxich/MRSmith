@@ -290,6 +290,25 @@ func (s *Server) handleRulesetEvents(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
+func (s *Server) handleEventDiff(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r)
+	if err != nil {
+		return err
+	}
+	q := r.URL.Query()
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	page, err := s.rs.Diff(id, r.PathValue("event"), q.Get("kind"), q.Get("q"), max(offset, 0), limit)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, page)
+	return nil
+}
+
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) error {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 200 {

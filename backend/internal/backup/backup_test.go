@@ -368,6 +368,11 @@ func TestScheduleRotationAndTelegram(t *testing.T) {
 	if len(e.tg.files) != 4 || !strings.Contains(e.tg.files[0], "1 набор правил") {
 		t.Fatalf("telegram: %v", e.tg.files)
 	}
+	for _, f := range e.tg.files {
+		if strings.Contains(f, "http") || strings.Contains(f, "docker-compose") {
+			t.Fatalf("caption carries the address or the restore hint: %q", f)
+		}
+	}
 	if !st.NextAutoAt.Equal(st.LastAutoAt.Add(12 * time.Hour)) {
 		t.Fatalf("next %v after %v", st.NextAutoAt, st.LastAutoAt)
 	}
@@ -417,5 +422,33 @@ func TestRebaser(t *testing.T) {
 	}
 	if cleanBase("https://Rules.Example.com/") != "https://rules.example.com" || cleanBase("javascript:alert(1)") != "" {
 		t.Error("cleanBase")
+	}
+}
+
+// The first automatic archive is made on the first tick after the schedule
+// is switched on, with a clock that moves between readings as it does on a
+// Linux server (on Windows two readings in a row are often equal).
+func TestFirstAutoBackupWithMovingClock(t *testing.T) {
+	e := newEnv(t)
+	e.set(rulesets.Input{Name: "A", Formats: []rules.OutputFormat{rules.OutYAML}, Include: []string{"+.a.example"}})
+	if err := e.svc.SetSettings(Settings{EveryHours: 24, Keep: 5}, ""); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	clock := time.Now()
+	e.svc.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		clock = clock.Add(time.Microsecond)
+		return clock
+	}
+	e.svc.tick()
+	e.svc.Wait()
+	st := e.svc.Status()
+	if st.Last == nil || st.Last.Kind != KindAuto || st.Last.Error != "" || st.LastAutoAt.IsZero() {
+		t.Fatalf("first tick made no automatic backup: %+v", st.Last)
+	}
+	if d := st.NextAutoAt.Sub(st.LastAutoAt); d != 24*time.Hour {
+		t.Fatalf("next automatic backup in %v", d)
 	}
 }

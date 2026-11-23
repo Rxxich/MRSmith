@@ -149,6 +149,17 @@ export interface RulesetEvent {
   sampleAdded?: string[]
   sampleRemoved?: string[]
   message?: string
+  /** The full lists of added and removed rules are kept. */
+  hasDiff?: boolean
+}
+
+/** One page of a build's full change list. */
+export interface DiffPage {
+  kind: 'added' | 'removed'
+  added: number
+  removed: number
+  total: number
+  items: string[]
 }
 
 export interface Bucket {

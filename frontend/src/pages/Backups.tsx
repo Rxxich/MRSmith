@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IconArchive, IconDownload, IconFolderSearch, IconRestore, IconTrash, IconUpload } from '@tabler/icons-react'
 import { useMe } from '../app/auth'
 import { api, errorText, upload } from '../lib/api'
@@ -30,12 +30,29 @@ export function BackupsPanel() {
   const status = useAsync(() => api.get<BackupStatus>('backups'), [])
   const [saving, setSaving] = useState(false)
   const [progress, setProgress] = useState<number | null>(null)
-  const [hidden, setHidden] = useState('')
+  // Jobs seen running on this page: their plain "created" result is worth
+  // showing once; an automatic backup made overnight is not.
+  const [watched, setWatched] = useState<Set<string>>(new Set())
   const picker = useRef<HTMLInputElement>(null)
   useNow()
 
   const st = status.data
   const running = st?.job ?? null
+  useEffect(() => {
+    if (running) setWatched((w) => (w.has(running.startedAt) ? w : new Set(w).add(running.startedAt)))
+  }, [running])
+  const last = st?.last
+  const showLast =
+    !!last &&
+    last.kind !== 'auto' &&
+    (!!last.error || !!last.warning || last.op === 'restore' || watched.has(last.startedAt))
+  const dismiss = async () => {
+    try {
+      status.setData(await api.post<BackupStatus>('backups/dismiss'))
+    } catch (e) {
+      toast(errorText(e), 'error')
+    }
+  }
   useInterval(() => void status.reload(), 1500, !!running)
   // Pick up an automatic backup that is about to be made.
   const dueSoon = !!st?.settings.everyHours && !!st.nextAutoAt && new Date(st.nextAutoAt).getTime() - Date.now() < 90_000
@@ -153,8 +170,8 @@ export function BackupsPanel() {
           <div className="panel-body stack">
             {!st.ready && st.problem && <Notice tone="warn">{st.problem}</Notice>}
             {running && <JobNotice job={running} />}
-            {!running && st.last && st.last.finishedAt !== hidden && (
-              <LastNotice job={st.last} onHide={() => setHidden(st.last?.finishedAt || '')} />
+            {!running && last && showLast && (
+              <LastNotice job={last} onHide={dismiss} />
             )}
             <div className="backup-plan">
               <Field label="Создавать автоматически">

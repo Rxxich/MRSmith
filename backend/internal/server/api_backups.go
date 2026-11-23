@@ -55,6 +55,15 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) erro
 	return nil
 }
 
+func (s *Server) handleDismissBackup(w http.ResponseWriter, r *http.Request) error {
+	if s.bk == nil {
+		return errNoBackups
+	}
+	s.bk.Dismiss()
+	writeJSON(w, http.StatusOK, s.bk.Status())
+	return nil
+}
+
 func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) error {
 	if s.bk == nil {
 		return errNoBackups

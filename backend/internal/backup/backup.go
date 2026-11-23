@@ -284,7 +284,7 @@ func (s *Service) Status() Status {
 		st.Ready = true
 	}
 	if m.EveryHours > 0 {
-		st.NextAutoAt = s.nextAuto(m)
+		st.NextAutoAt = nextAuto(m, s.now())
 	}
 	s.mu.Lock()
 	if s.job != nil {
@@ -302,9 +302,12 @@ func (s *Service) Status() Status {
 	return st
 }
 
-func (s *Service) nextAuto(m meta) time.Time {
+// nextAuto is when the next automatic archive is due; now if it already is.
+// The caller passes one "now" for both this and the comparison: two calls
+// to the clock would always put "now" a moment before "due".
+func nextAuto(m meta, now time.Time) time.Time {
 	if m.LastAutoAt.IsZero() {
-		next := s.now()
+		next := now
 		if m.LastError != "" {
 			next = m.LastTryAt.Add(retryAfter)
 		}
@@ -395,6 +398,14 @@ func (s *Service) Wait() {
 		<-done
 	}
 	s.wg.Wait()
+}
+
+// Dismiss forgets the result of the last finished job, so the panel stops
+// showing it.
+func (s *Service) Dismiss() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.last = nil
 }
 
 // Create starts a backup made by hand.
@@ -582,7 +593,8 @@ func (s *Service) Run(ctx context.Context) {
 
 func (s *Service) tick() {
 	m := s.meta()
-	if m.EveryHours <= 0 || s.now().Before(s.nextAuto(m)) {
+	now := s.now()
+	if m.EveryHours <= 0 || now.Before(nextAuto(m, now)) {
 		return
 	}
 	_ = s.start(&Job{Op: "create", Kind: KindAuto}, func(j *Job) error { return s.runCreate(j, KindAuto, "") })
@@ -600,27 +612,19 @@ func (s *Service) sendTelegram(name string, man *Manifest) error {
 	}
 	what := summary(man)
 	if info.Size() > s.opt.TelegramMax {
-		msg := fmt.Sprintf("<b>Бэкап MRSmith</b>\n%s\n\nФайл %s весит %s — Telegram принимает от ботов файлы до %s, поэтому он есть только в папке backup на сервере.",
+		msg := fmt.Sprintf("<b>Бэкап MRSmith</b>\n%s\n\nФайл %s весит %s, а Telegram принимает от ботов файлы до %s: он есть только в папке backup на сервере.",
 			html.EscapeString(what), html.EscapeString(name), sizeText(info.Size()), sizeText(s.opt.TelegramMax))
 		if err := s.tg.Send(ctx, msg); err != nil {
 			return err
 		}
 		return fmt.Errorf("файл больше %s, отправлено только сообщение", sizeText(s.opt.TelegramMax))
 	}
-	caption := fmt.Sprintf("<b>Бэкап MRSmith</b>\n%s\n\nЧтобы восстановить, положите файл в папку backup рядом с docker-compose.yml и выберите его в настройках панели.",
-		html.EscapeString(what))
-	return s.tg.SendFile(ctx, p, name, caption)
+	return s.tg.SendFile(ctx, p, name, "<b>Бэкап MRSmith</b>\n"+html.EscapeString(what))
 }
 
 func summary(m *Manifest) string {
-	parts := []string{
-		count(m.Rulesets, "набор правил", "набора правил", "наборов правил"),
-		count(m.Objects, "файл", "файла", "файлов") + " в хранилище",
-	}
-	if m.LinkBase != "" {
-		parts = append(parts, m.LinkBase)
-	}
-	return strings.Join(parts, ", ")
+	return count(m.Rulesets, "набор правил", "набора правил", "наборов правил") + ", " +
+		count(m.Objects, "файл", "файла", "файлов") + " в хранилище"
 }
 
 func count(n int, one, few, many string) string {

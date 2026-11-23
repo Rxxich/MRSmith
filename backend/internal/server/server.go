@@ -212,6 +212,7 @@ func (s *Server) routes() {
 	a.HandleFunc("PUT /api/backups/settings", s.authed(s.handleBackupSettings))
 	a.HandleFunc("POST /api/backups", s.authed(s.handleCreateBackup))
 	a.HandleFunc("POST /api/backups/restore", s.authed(s.handleRestoreBackup))
+	a.HandleFunc("POST /api/backups/dismiss", s.authed(s.handleDismissBackup))
 	a.HandleFunc("POST /api/backups/upload", s.authed(s.handleUploadBackup))
 	a.HandleFunc("GET /api/backups/files/{name}", s.authed(s.handleDownloadBackup))
 	a.HandleFunc("DELETE /api/backups/files/{name}", s.authed(s.handleDeleteBackup))
@@ -233,6 +234,7 @@ func (s *Server) routes() {
 	a.HandleFunc("POST /api/rulesets/{id}/exclude/preview", s.authed(s.handlePreviewExclusion))
 	a.HandleFunc("POST /api/rulesets/{id}/token", s.authed(s.handleRotateToken))
 	a.HandleFunc("GET /api/rulesets/{id}/events", s.authed(s.handleRulesetEvents))
+	a.HandleFunc("GET /api/rulesets/{id}/events/{event}/diff", s.authed(s.handleEventDiff))
 	a.HandleFunc("GET /api/rulesets/{id}/download/{format}", s.authed(s.handleDownloadOutput))
 
 	a.HandleFunc("POST /api/convert", s.authed(s.handleConvert))

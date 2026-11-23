@@ -2697,3 +2697,34 @@ label.btn {
 .src-line:has(.src-error) > .dot {
   margin-top: 7px;
 }
+
+/* ---- full change list of a build ----------------------------------------- */
+
+.event.has-diff {
+  cursor: pointer;
+}
+
+.event.has-diff:hover {
+  background: color-mix(in srgb, var(--bevel) 50%, transparent);
+}
+
+.event-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.diff-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-stretch: 87.5%;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.diff-list li {
+  overflow-wrap: anywhere;
+}

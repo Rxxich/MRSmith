@@ -286,7 +286,9 @@ func (m *Manager) Cleanup() {
 		return
 	}
 	used := map[string]bool{}
+	live := map[string]bool{}
 	for _, rs := range all {
+		live[rs.ID] = true
 		for _, s := range rs.Sources {
 			if s.State.CacheKey != "" {
 				used[storage.DownloadsBucket+"/"+s.State.CacheKey] = true
@@ -296,6 +298,7 @@ func (m *Manager) Cleanup() {
 			}
 		}
 	}
+	m.dropOrphanDiffs(live)
 	for _, bucket := range []string{storage.DownloadsBucket, storage.SourcesBucket} {
 		objs, err := m.storage.Walk(bucket)
 		if err != nil {
@@ -386,6 +389,7 @@ func (m *Manager) Delete(id string) error {
 	_, _ = m.storage.DeleteObjects(storage.DownloadsBucket, nil, []string{rs.Slug + "/"})
 	os.RemoveAll(filepath.Join(m.dir, "sources", id))
 	os.RemoveAll(filepath.Join(m.dir, "outputs", id))
+	os.RemoveAll(m.diffDir(id))
 	os.Remove(m.statePath(id))
 	m.cacheMu.Lock()
 	delete(m.cache, id)
@@ -818,6 +822,14 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 		ev.Kind = "changed"
 	} else {
 		ev.Kind = "unchanged"
+	}
+	// A first build or a restore "adds" the whole set: nothing to list.
+	if changed && len(added)+len(removed) > 0 && trigger != "create" && trigger != "restore" {
+		if err := m.saveDiff(id, ev.ID, added, removed); err != nil {
+			m.log.Warn("save change list", "id", id, "err", err)
+		} else {
+			ev.HasDiff = true
+		}
 	}
 	var warnings []string
 	for _, st := range states {

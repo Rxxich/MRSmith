@@ -132,7 +132,9 @@ type Event struct {
 	Total         int       `json:"total"`
 	SampleAdded   []string  `json:"sampleAdded,omitempty"`
 	SampleRemoved []string  `json:"sampleRemoved,omitempty"`
-	Message       string    `json:"message,omitempty"`
+	// HasDiff: the full lists of added and removed rules are kept.
+	HasDiff bool   `json:"hasDiff,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // Input is what a user may set on a rule set.
