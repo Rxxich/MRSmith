@@ -2474,7 +2474,33 @@ label.btn {
 }
 
 .journal-foot {
+  flex-direction: column;
+  align-items: stretch;
   justify-content: flex-start;
+}
+
+.journal-pager {
+  padding-top: 0;
+}
+
+.journal-tools .journal-search {
+  max-width: 420px;
+}
+
+.journal-empty {
+  border-top: 1px solid var(--seam-soft);
+}
+
+.table th.wrap-head {
+  white-space: normal;
+  max-width: 110px;
+  line-height: 1.25;
+}
+
+.outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 @media (max-width: 860px) {
@@ -2639,4 +2665,35 @@ label.btn {
     justify-content: flex-start;
     flex-wrap: wrap;
   }
+}
+
+/* The result filter wraps onto a second row on phones instead of squeezing. */
+.journal-tools .segmented {
+  flex-wrap: wrap;
+}
+
+.journal-tools .segmented button {
+  white-space: nowrap;
+}
+
+/* A failed source says why right under its link. */
+.src-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.src-error {
+  display: block;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.src-line:has(.src-error) {
+  align-items: flex-start;
+}
+
+.src-line:has(.src-error) > .dot {
+  margin-top: 7px;
 }

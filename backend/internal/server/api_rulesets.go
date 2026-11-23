@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -82,7 +83,7 @@ func (s *Server) buildInBackground(id string, force bool, trigger string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(s.bg, 10*time.Minute)
 		defer cancel()
-		if _, _, err := s.rs.Refresh(ctx, id, force, trigger); err != nil {
+		if _, _, err := s.rs.Refresh(ctx, id, force, trigger); err != nil && !errors.Is(err, rulesets.ErrInterrupted) {
 			s.log.Warn("background build failed", "id", id, "err", err)
 		}
 	}()

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"mrsmith/internal/apperr"
 	"mrsmith/internal/fetch"
 	"mrsmith/internal/rules"
 	"mrsmith/internal/storage"
@@ -39,7 +40,13 @@ type Manager struct {
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
 	running map[string]bool
-	sem     chan struct{}
+	// fetching holds a way to stop the downloads of a set's build, so an
+	// edit or a delete does not wait for a slow link to time out.
+	fetching map[string]context.CancelFunc
+	// sem bounds builds (parsing and rendering), fetchSem bounds downloads.
+	// A link that does not answer holds only a download slot.
+	sem      chan struct{}
+	fetchSem chan struct{}
 
 	cacheMu sync.Mutex
 	cache   map[string]cachedLines
@@ -80,8 +87,8 @@ func NewManager(db *store.DB, st *storage.Service, f *fetch.Client, dataDir stri
 	}
 	return &Manager{
 		db: db, storage: st, fetcher: f, dir: dataDir, maxBytes: maxBytes, log: log,
-		locks: map[string]*sync.Mutex{}, running: map[string]bool{},
-		sem:   make(chan struct{}, 2),
+		locks: map[string]*sync.Mutex{}, running: map[string]bool{}, fetching: map[string]context.CancelFunc{},
+		sem: make(chan struct{}, 2), fetchSem: make(chan struct{}, 4),
 		cache: map[string]cachedLines{},
 	}, nil
 }
@@ -186,6 +193,7 @@ func (m *Manager) Update(id string, in Input) (*Ruleset, error) {
 	if m.slugTaken(in.Slug, id) {
 		return nil, invalid("ссылка /r/%s уже занята другим набором", in.Slug)
 	}
+	m.interrupt(id)
 	l := m.lock(id)
 	l.Lock()
 	defer l.Unlock()
@@ -362,6 +370,7 @@ func nextRun(last time.Time, interval int) time.Time {
 }
 
 func (m *Manager) Delete(id string) error {
+	m.interrupt(id)
 	l := m.lock(id)
 	l.Lock()
 	defer l.Unlock()
@@ -410,6 +419,7 @@ func (m *Manager) EditEntries(ctx context.Context, id string, add []string, remo
 	if err != nil {
 		return nil, err
 	}
+	m.interrupt(id)
 	l := m.lock(id)
 	l.Lock()
 	_, err = store.Modify(m.db, store.Rulesets, id, func(rs *Ruleset) error {
@@ -452,6 +462,7 @@ func (m *Manager) ClearOverrides(ctx context.Context, id string, include, exclud
 	for _, x := range exclude {
 		exc[x] = true
 	}
+	m.interrupt(id)
 	l := m.lock(id)
 	l.Lock()
 	_, err := store.Modify(m.db, store.Rulesets, id, func(rs *Ruleset) error {
@@ -505,6 +516,7 @@ func (m *Manager) ReplaceEntry(ctx context.Context, id, from, to string) (*Rules
 		return nil, invalid("правило не изменилось")
 	}
 	manual := false
+	m.interrupt(id)
 	l := m.lock(id)
 	l.Lock()
 	_, err = store.Modify(m.db, store.Rulesets, id, func(rs *Ruleset) error {
@@ -594,12 +606,6 @@ func (m *Manager) removeStaleOutputs(rs *Ruleset) {
 // Refresh rebuilds a rule set. With forceFetch every URL is downloaded again
 // (conditionally); otherwise cached copies are reused when present.
 func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigger string) (*Ruleset, *Event, error) {
-	select {
-	case m.sem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, nil, ctx.Err()
-	}
-	defer func() { <-m.sem }()
 	m.gate.RLock()
 	defer m.gate.RUnlock()
 
@@ -629,13 +635,28 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 	}
 	var inputs []loadedSource
 	sourceFailed := false
+	fetchCtx, stopFetch := context.WithCancel(ctx)
+	defer stopFetch()
+	m.mu.Lock()
+	m.fetching[id] = stopFetch
+	m.mu.Unlock()
 	for _, src := range rs.Sources {
-		data, st := m.loadSource(ctx, rs, src, forceFetch, usedKeys)
+		data, st := m.loadSource(fetchCtx, rs, src, forceFetch, usedKeys)
 		states[src.ID] = st
 		inputs = append(inputs, loadedSource{src, data})
 		if st.Status == StatusError || data == nil {
 			sourceFailed = true
 		}
+	}
+	m.mu.Lock()
+	delete(m.fetching, id)
+	m.mu.Unlock()
+	if fetchCtx.Err() != nil {
+		// Edited, deleted or shutting down: the next build starts afresh.
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return nil, nil, ErrInterrupted
 	}
 
 	now := time.Now().UTC()
@@ -667,6 +688,13 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 		}
 		return saved, ev, nil
 	}
+
+	select {
+	case m.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+	defer func() { <-m.sem }()
 
 	combined := rules.NewSet()
 	loaded := 0
@@ -706,8 +734,12 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 		}
 		return saved, ev, nil
 	}
+	kept := " — файлы ещё не собраны"
+	if m.anyOutput(rs) {
+		kept = " — оставлены прошлые файлы"
+	}
 	if len(rs.Sources) > 0 && loaded == 0 && len(rs.Include) == 0 {
-		return fail("ни один источник не загрузился — оставлены прошлые файлы")
+		return fail("ни один источник не загрузился" + kept)
 	}
 
 	inc, _ := rules.ParseEntries(rs.Include)
@@ -720,7 +752,7 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 	opts := rules.RenderOptions{AggregateIP: rs.AggregateIP, NoResolve: rs.NoResolve}
 	built := rules.Resolve(combined, rs.Behavior, opts)
 	if built.Count() == 0 {
-		return fail("после обработки набор пуст — оставлены прошлые файлы")
+		return fail("после обработки набор пуст" + kept)
 	}
 
 	outputs := map[rules.OutputFormat]OutputInfo{}
@@ -874,6 +906,29 @@ func hashInputs(rs *Ruleset, states map[string]SourceState) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ErrInterrupted ends a build whose downloads were stopped by an edit or a
+// delete of the same set.
+var ErrInterrupted = apperr.Conflict("обновление прервано: набор изменили или удалили, пока скачивались источники")
+
+// interrupt stops the downloads of a running build of the set, if any.
+func (m *Manager) interrupt(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if stop := m.fetching[id]; stop != nil {
+		stop()
+	}
+}
+
+// anyOutput reports whether any published file of a set is on disk.
+func (m *Manager) anyOutput(rs *Ruleset) bool {
+	for _, f := range rs.Formats {
+		if _, err := os.Stat(m.OutputPath(rs.ID, f)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // outputsPresent reports whether every published file of a set is built.
 func (m *Manager) outputsPresent(rs *Ruleset) bool {
 	for _, f := range rs.Formats {
@@ -970,9 +1025,17 @@ func (m *Manager) loadSource(ctx context.Context, rs *Ruleset, src Source, force
 		if hasCache {
 			etag, lm = st.ETag, st.LastModified
 		}
-		fctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		res, err := m.fetcher.Get(fctx, src.URL, etag, lm)
-		cancel()
+		var res *fetch.Result
+		var err error
+		select {
+		case m.fetchSem <- struct{}{}:
+			fctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			res, err = m.fetcher.Get(fctx, src.URL, etag, lm)
+			cancel()
+			<-m.fetchSem
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
 		st.CheckedAt = now
 		if err != nil {
 			st.Status, st.Error = StatusError, err.Error()
@@ -1123,6 +1186,7 @@ func (m *Manager) Lines(id string) (*Ruleset, []string, error) {
 // EnableOptimizations switches on domain and/or IP optimization and rebuilds
 // from cached sources. Used to clear redundancy found inside one set.
 func (m *Manager) EnableOptimizations(ctx context.Context, id string, domains, ips bool) (*Ruleset, error) {
+	m.interrupt(id)
 	l := m.lock(id)
 	l.Lock()
 	_, err := store.Modify(m.db, store.Rulesets, id, func(rs *Ruleset) error {
@@ -1308,7 +1372,7 @@ func (m *Manager) schedule(ctx context.Context) {
 			if first {
 				trigger = "create"
 			}
-			if _, _, err := m.Refresh(ctx, id, true, trigger); err != nil && !errors.Is(err, context.Canceled) {
+			if _, _, err := m.Refresh(ctx, id, true, trigger); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrInterrupted) {
 				m.log.Warn("scheduled build failed", "id", id, "err", err)
 			}
 		}(rs.ID, rs.State.LastRunAt.IsZero())

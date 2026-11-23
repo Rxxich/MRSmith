@@ -99,39 +99,122 @@ func TestDownloadCounters(t *testing.T) {
 		t.Fatalf("object counter after re-upload and rename: %s", body)
 	}
 
-	_, body = e.do("GET", "/api/downloads", nil, nil)
-	var journal struct {
-		Summary struct {
-			Hits    int
-			Clients []struct {
-				IP, UserAgent     string
-				Downloads, Checks int
-				Files             []string
-			}
-		}
-		Recent []struct{ Name string }
+	journal := e.journal("")
+	if journal.Totals.Hits != 6 || journal.Totals.Clients != 2 || len(journal.Clients) != 2 || journal.Total != 2 {
+		t.Fatalf("journal: %+v", journal)
 	}
-	json.Unmarshal(body, &journal)
-	if journal.Summary.Hits != 6 || len(journal.Summary.Clients) != 2 || len(journal.Recent) != 6 {
-		t.Fatalf("journal: %s", body)
-	}
-	c := journal.Summary.Clients[0]
+	c := journal.Clients[0]
 	if c.UserAgent != "mihomo/1.19.34" || c.IP != "127.0.0.1" || c.Downloads != 4 || c.Checks != 1 || len(c.Files) != 2 {
 		t.Fatalf("latest client: %+v", c)
+	}
+	if j := e.journal("?view=recent"); j.Total != 6 || len(j.Recent) != 6 || j.Recent[0].Outcome != "ok" {
+		t.Fatalf("recent: %+v", j)
 	}
 
 	if r, _ := e.do("DELETE", "/api/downloads", nil, nil); r.StatusCode != 204 {
 		t.Fatalf("clear = %d", r.StatusCode)
 	}
-	_, body = e.do("GET", "/api/downloads", nil, nil)
-	json.Unmarshal(body, &journal)
-	if journal.Summary.Hits != 0 {
-		t.Fatalf("journal not cleared: %s", body)
+	if j := e.journal(""); j.Totals.Hits != 0 {
+		t.Fatalf("journal not cleared: %+v", j)
 	}
 	_, body = e.do("GET", "/api/rulesets/"+rs.ID, nil, nil)
 	json.Unmarshal(body, &got)
 	if got.Downloads["txt"].Downloads != 2 {
 		t.Fatal("clearing the journal reset the counters")
+	}
+}
+
+type journalPage struct {
+	Totals struct{ Hits, Downloads, Checks, Failed, Clients int }
+	Total  int
+	Recent []struct {
+		Name, IP, UserAgent, Outcome string
+		Bytes, Size                  int64
+	}
+	Clients []struct {
+		IP, UserAgent             string
+		Downloads, Checks, Failed int
+		Files                     []string
+	}
+}
+
+func (e *env) journal(query string) journalPage {
+	e.t.Helper()
+	r, body := e.do("GET", "/api/downloads"+query, nil, nil)
+	if r.StatusCode != 200 {
+		e.t.Fatalf("journal %s: %d %s", query, r.StatusCode, body)
+	}
+	var p journalPage
+	json.Unmarshal(body, &p)
+	return p
+}
+
+func TestJournalOutcomesSearchAndPages(t *testing.T) {
+	e := newEnv(t, "/")
+	e.login("/")
+	_, body := e.do("POST", "/api/rulesets", map[string]any{
+		"name": "Приватный", "slug": "secret", "behavior": "domain", "formats": []string{"txt"},
+		"include": []string{"example.com"}, "private": true,
+	}, nil)
+	var rs struct{ ID, Token string }
+	json.Unmarshal(body, &rs)
+	e.waitBuilt("/api", rs.ID)
+	e.do("POST", "/api/buckets", map[string]any{"name": "closed", "public": false}, nil)
+	b, ct := multipartBody(nil, "file", "a.txt", []byte("a.example\n"))
+	e.do("POST", "/api/buckets/closed/upload", b, map[string]string{"Content-Type": ct})
+
+	phone := map[string]string{"User-Agent": "Dart/3.13", "X-Forwarded-For": "94.181.18.239"}
+	laptop := map[string]string{"User-Agent": "mihomo/1.19.34", "X-Forwarded-For": "10.0.0.7"}
+	for i := 0; i < 3; i++ {
+		e.do("GET", "/r/secret.txt?token="+rs.Token, nil, phone)
+	}
+	if r, _ := e.do("GET", "/r/secret.txt?token=wrong", nil, phone); r.StatusCode != 404 {
+		t.Fatalf("wrong token = %d", r.StatusCode)
+	}
+	e.do("GET", "/r/secret.yaml?token="+rs.Token, nil, laptop) // format not published
+	e.do("GET", "/f/closed/a.txt", nil, laptop)                // private bucket
+	e.do("GET", "/f/nobucket/a.txt", nil, laptop)              // unknown: not recorded
+	e.do("HEAD", "/r/secret.txt?token=wrong", nil, laptop)     // HEAD: not recorded
+
+	all := e.journal("?view=recent")
+	if all.Totals.Hits != 6 || all.Totals.Downloads != 3 || all.Totals.Failed != 3 || all.Total != 6 {
+		t.Fatalf("totals: %+v", all)
+	}
+	got := map[string]string{}
+	for _, h := range all.Recent {
+		got[h.Name+" "+h.Outcome] = h.IP
+	}
+	for _, want := range []string{"secret.txt bad-token", "secret.yaml missing", "closed/a.txt private", "secret.txt ok"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("no %q in %v", want, got)
+		}
+	}
+	if h := all.Recent[len(all.Recent)-1]; h.Outcome != "ok" || h.Bytes == 0 || h.Bytes != h.Size {
+		t.Fatalf("first download: %+v", h)
+	}
+
+	if j := e.journal("?view=recent&q=94.181"); j.Total != 4 || j.Recent[0].IP != "94.181.18.239" {
+		t.Fatalf("search by IP: %+v", j)
+	}
+	if j := e.journal("?view=recent&q=MIHOMO&outcome=failed"); j.Total != 2 {
+		t.Fatalf("search by app and outcome: %+v", j)
+	}
+	if j := e.journal("?view=recent&limit=2&offset=4"); j.Total != 6 || len(j.Recent) != 2 {
+		t.Fatalf("last page: %+v", j)
+	}
+	if j := e.journal("?q=dart"); j.Total != 1 || j.Clients[0].Downloads != 3 || j.Clients[0].Failed != 1 || j.Totals.Clients != 2 {
+		t.Fatalf("clients search: %+v", j)
+	}
+	if r, _ := e.do("GET", "/api/downloads?outcome=nope", nil, nil); r.StatusCode != 400 {
+		t.Fatalf("bad outcome filter = %d", r.StatusCode)
+	}
+
+	// Counters on the set count only what really went out.
+	_, body = e.do("GET", "/api/rulesets/"+rs.ID, nil, nil)
+	var set struct{ Downloads map[string]counter }
+	json.Unmarshal(body, &set)
+	if c := set.Downloads["txt"]; c.Downloads != 3 || c.Checks != 0 {
+		t.Fatalf("counter: %+v", c)
 	}
 }
 
@@ -192,5 +275,24 @@ func TestChangeNotice(t *testing.T) {
 	defer mu.Unlock()
 	if len(notices) != 1 {
 		t.Fatalf("a set with notices off still notified: %+v", notices)
+	}
+}
+
+type brokenConn struct{ *httptest.ResponseRecorder }
+
+func (b brokenConn) Write(p []byte) (int, error) { return len(p) / 2, io.ErrClosedPipe }
+
+func TestResultOfBrokenTransfer(t *testing.T) {
+	get := httptest.NewRequest("GET", "/r/x.txt", nil)
+	rw := &recordingWriter{ResponseWriter: brokenConn{httptest.NewRecorder()}}
+	rw.Header().Set("Content-Length", "100")
+	rw.Write(make([]byte, 100))
+	if res, ok := result(get, rw); !ok || res.Outcome != "aborted" || res.Bytes != 50 || res.Size != 100 {
+		t.Fatalf("broken transfer: %+v %v", res, ok)
+	}
+	rw = &recordingWriter{ResponseWriter: httptest.NewRecorder()}
+	rw.WriteHeader(http.StatusPartialContent)
+	if _, ok := result(get, rw); ok {
+		t.Fatal("range request recorded")
 	}
 }

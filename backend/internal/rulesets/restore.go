@@ -57,7 +57,7 @@ func (m *Manager) RebuildAll(ctx context.Context, trigger string) {
 		if ctx.Err() != nil {
 			return
 		}
-		if _, _, err := m.Refresh(ctx, rs.ID, false, trigger); err != nil && !errors.Is(err, context.Canceled) {
+		if _, _, err := m.Refresh(ctx, rs.ID, false, trigger); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrInterrupted) {
 			m.log.Warn("rebuild after restore", "id", rs.ID, "err", err)
 		}
 	}

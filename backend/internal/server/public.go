@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"mrsmith/internal/apperr"
+	"mrsmith/internal/downloads"
 	"mrsmith/internal/rules"
 	"mrsmith/internal/rulesets"
 )
@@ -25,8 +26,16 @@ func (s *Server) serveRuleset(w http.ResponseWriter, r *http.Request) {
 	}
 	slug, format := name[:dot], rules.OutputFormat(name[dot+1:])
 	rs, err := s.rs.BySlug(slug)
-	if err != nil || !format.Valid() || !rulesets.CheckToken(rs, r.URL.Query().Get("token")) {
-		// One answer for "missing" and "wrong token", so links cannot be probed.
+	if err != nil || !format.Valid() {
+		http.NotFound(w, r)
+		return
+	}
+	if !rulesets.CheckToken(rs, r.URL.Query().Get("token")) {
+		// The same answer as for a missing set, so links cannot be probed.
+		// The journal tells the admin what really happened.
+		if res, ok := failure(r, downloads.OutcomeBadToken); ok && s.dl != nil {
+			s.dl.Ruleset(rs.ID, rs.Slug, format, s.clientIP(r), r.UserAgent(), res)
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -39,14 +48,13 @@ func (s *Server) serveRuleset(w http.ResponseWriter, r *http.Request) {
 	rw := &recordingWriter{ResponseWriter: w}
 	if err := s.sendOutput(rw, r, rs, format, false); err != nil {
 		if e, ok := apperr.As(err); ok && e.Status == http.StatusNotFound {
-			http.NotFound(w, r)
-			return
+			http.NotFound(rw, r)
+		} else {
+			s.writeError(rw, r, err)
 		}
-		s.writeError(w, r, err)
-		return
 	}
-	if ok, nm := counted(r, rw.status); ok && s.dl != nil {
-		s.dl.Ruleset(rs.ID, rs.Slug, format, s.clientIP(r), r.UserAgent(), nm)
+	if res, ok := result(r, rw); ok && s.dl != nil {
+		s.dl.Ruleset(rs.ID, rs.Slug, format, s.clientIP(r), r.UserAgent(), res)
 	}
 }
 
@@ -69,13 +77,23 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := s.st.Bucket(bucket)
-	if err != nil || !b.Public {
+	if err != nil {
 		http.NotFound(w, r)
+		return
+	}
+	turnAway := func(outcome string) {
+		if res, ok := failure(r, outcome); ok && s.dl != nil {
+			s.dl.File(bucket, key, s.clientIP(r), r.UserAgent(), res)
+		}
+		http.NotFound(w, r)
+	}
+	if !b.Public {
+		turnAway(downloads.OutcomePrivate)
 		return
 	}
 	o, err := s.st.Object(bucket, key)
 	if err != nil {
-		http.NotFound(w, r)
+		turnAway(downloads.OutcomeMissing)
 		return
 	}
 	h := w.Header()
@@ -84,7 +102,7 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "public, max-age=300")
 	rw := &recordingWriter{ResponseWriter: w}
 	s.sendObject(rw, r, o, "public")
-	if ok, nm := counted(r, rw.status); ok && s.dl != nil {
-		s.dl.File(o.Bucket, o.Key, s.clientIP(r), r.UserAgent(), nm)
+	if res, ok := result(r, rw); ok && s.dl != nil {
+		s.dl.File(o.Bucket, o.Key, s.clientIP(r), r.UserAgent(), res)
 	}
 }

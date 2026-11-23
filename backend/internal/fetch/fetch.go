@@ -225,12 +225,18 @@ func friendly(err error) error {
 		return fmt.Errorf("не удалось подключиться через прокси для GitHub %s: %v", perr.Proxy, perr.Err)
 	}
 	msg := err.Error()
+	var nerr net.Error
 	switch {
-	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "Client.Timeout"):
+	case errors.Is(err, context.Canceled):
+		return err
+	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "Client.Timeout") ||
+		strings.Contains(msg, "timeout awaiting response headers") || errors.As(err, &nerr) && nerr.Timeout():
 		return errors.New("сервер не ответил вовремя")
 	case strings.Contains(msg, "no such host"):
 		return errors.New("домен не найден (DNS)")
-	case strings.Contains(msg, "connection refused"):
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(msg, "connection reset"):
+		return errors.New("сервер закрыл соединение, не отдав ответ целиком")
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "actively refused"):
 		return errors.New("сервер отказал в соединении")
 	case strings.Contains(msg, "certificate"):
 		return errors.New("ошибка TLS-сертификата сервера")

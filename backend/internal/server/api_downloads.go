@@ -3,17 +3,22 @@ package server
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"mrsmith/internal/apperr"
+	"mrsmith/internal/downloads"
 	"mrsmith/internal/netproxy"
 	"mrsmith/internal/notify"
 )
 
-// recordingWriter remembers the status a public file was answered with.
+// recordingWriter remembers how a public file was answered: the status,
+// how much of the body went out and whether writing failed.
 type recordingWriter struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
+	broken bool
 }
 
 func (w *recordingWriter) WriteHeader(code int) {
@@ -27,24 +32,44 @@ func (w *recordingWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return w.ResponseWriter.Write(b)
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += int64(n)
+	if err != nil {
+		w.broken = true
+	}
+	return n, err
 }
 
 func (w *recordingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// counted reports whether a public response counts as a download (200) or
-// as a check of an up-to-date copy (304). HEAD and range requests do not count.
-func counted(r *http.Request, status int) (ok, notModified bool) {
+// result tells what a public response amounts to. Only GET requests go into
+// the journal; HEAD and range requests (206) do not.
+func result(r *http.Request, w *recordingWriter) (downloads.Result, bool) {
 	if r.Method != http.MethodGet {
-		return false, false
+		return downloads.Result{}, false
 	}
-	switch status {
-	case http.StatusOK:
-		return true, false
-	case http.StatusNotModified:
-		return true, true
+	size, _ := strconv.ParseInt(w.Header().Get("Content-Length"), 10, 64)
+	res := downloads.Result{Bytes: w.bytes, Size: size}
+	switch {
+	case w.status == http.StatusNotModified:
+		res.Outcome, res.Bytes, res.Size = downloads.OutcomeNotModified, 0, 0
+	case w.status == http.StatusOK && (w.broken || size > 0 && w.bytes < size):
+		res.Outcome = downloads.OutcomeAborted
+	case w.status == http.StatusOK:
+		res.Outcome = downloads.OutcomeOK
+	case w.status == http.StatusNotFound:
+		res.Outcome, res.Bytes, res.Size = downloads.OutcomeMissing, 0, 0
+	case w.status >= 500:
+		res.Outcome, res.Bytes, res.Size = downloads.OutcomeError, 0, 0
+	default:
+		return res, false
 	}
-	return false, false
+	return res, true
+}
+
+// failure is a request turned away before anything was sent.
+func failure(r *http.Request, outcome string) (downloads.Result, bool) {
+	return downloads.Result{Outcome: outcome}, r.Method == http.MethodGet
 }
 
 func (s *Server) flushDownloads() {
@@ -58,15 +83,26 @@ func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request) error {
 		return apperr.NotFound("журнал скачиваний выключен")
 	}
 	s.dl.Flush()
-	sum, err := s.dl.Clients(300)
+	q := r.URL.Query()
+	f := downloads.Filter{View: q.Get("view"), Query: q.Get("q"), Outcome: q.Get("outcome")}
+	switch f.Outcome {
+	case "", downloads.OutcomeOK, downloads.OutcomeNotModified, "failed":
+	default:
+		return badRequest("неизвестный результат запроса")
+	}
+	if len(f.Query) > 200 {
+		return badRequest("слишком длинный запрос")
+	}
+	f.Offset, _ = strconv.Atoi(q.Get("offset"))
+	f.Limit, _ = strconv.Atoi(q.Get("limit"))
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	page, err := s.dl.Query(f)
 	if err != nil {
 		return err
 	}
-	recent, err := s.dl.Recent(100)
-	if err != nil {
-		return err
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"summary": sum, "recent": recent})
+	writeJSON(w, http.StatusOK, page)
 	return nil
 }
 

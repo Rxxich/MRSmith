@@ -227,6 +227,8 @@ export interface SessionInfo {
   userAgent: string
 }
 
+export type DownloadOutcome = 'ok' | 'not-modified' | 'aborted' | 'bad-token' | 'missing' | 'private' | 'error'
+
 export interface DownloadHit {
   time: string
   ip: string
@@ -236,7 +238,9 @@ export interface DownloadHit {
   bucket?: string
   key?: string
   name: string
-  notModified?: boolean
+  outcome: DownloadOutcome
+  bytes?: number
+  size?: number
 }
 
 export interface DownloadClient {
@@ -244,6 +248,7 @@ export interface DownloadClient {
   userAgent: string
   downloads: number
   checks: number
+  failed: number
   firstAt: string
   lastAt: string
   files: string[]
@@ -251,9 +256,12 @@ export interface DownloadClient {
   lastFile: string
 }
 
+/** One page of the journal of public downloads. */
 export interface DownloadJournal {
-  summary: { clients: DownloadClient[]; hits: number; since?: string; keep: number }
+  totals: { hits: number; downloads: number; checks: number; failed: number; clients: number; since?: string; keep: number }
+  total: number
   recent: DownloadHit[]
+  clients: DownloadClient[]
 }
 
 export interface ProxyInfo {

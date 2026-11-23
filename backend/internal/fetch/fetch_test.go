@@ -117,3 +117,45 @@ func TestIsGitHubHost(t *testing.T) {
 		}
 	}
 }
+
+func TestSilentServerTimesOutInPlainWords(t *testing.T) {
+	headers := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer headers.Close()
+	drip := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for {
+			w.Write([]byte("a.example\n"))
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}))
+	defer drip.Close()
+	c := New(400*time.Millisecond, 1<<20, true, nil, "test")
+	for _, u := range []string{headers.URL, drip.URL} {
+		start := time.Now()
+		_, err := c.Get(context.Background(), u, "", "")
+		if err == nil || err.Error() != "сервер не ответил вовремя" {
+			t.Fatalf("%s: %v", u, err)
+		}
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("%s: gave up after %v", u, d)
+		}
+	}
+}
+
+func TestHangUpInPlainWords(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+	c := New(2*time.Second, 1<<20, true, nil, "test")
+	if _, err := c.Get(context.Background(), srv.URL, "", ""); err == nil || !strings.Contains(err.Error(), "закрыл соединение") {
+		t.Fatalf("got %v", err)
+	}
+}

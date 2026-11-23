@@ -1,14 +1,14 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { IconDeviceDesktop, IconKey, IconLogout, IconSend, IconTrash } from '@tabler/icons-react'
+import { type FormEvent, useState } from 'react'
+import { IconDeviceDesktop, IconKey, IconLogout, IconSend } from '@tabler/icons-react'
 import { useAuth, useMe } from '../app/auth'
 import { api, errorText } from '../lib/api'
-import { CHECKS, DOWNLOADS, count, dateTime, describeAgent, describeBrowser, fmtBytes, fmtNum, publicBase, relTime } from '../lib/format'
+import { count, dateTime, describeBrowser, fmtBytes, publicBase, relTime } from '../lib/format'
 import { useAsync, useTitle } from '../lib/hooks'
-import type { DownloadJournal, Integrations, ProxyInfo, SessionInfo } from '../lib/types'
-import { Button, Field, Input, Loading, Notice, Segmented } from '../ui/core'
+import type { Integrations, ProxyInfo, SessionInfo } from '../lib/types'
+import { Button, Field, Input, Loading, Notice } from '../ui/core'
 import { useOverlay } from '../ui/overlay'
 import { BackupsPanel } from './Backups'
+import { Journal } from './Journal'
 
 export function Settings() {
   useTitle('Настройки')
@@ -52,7 +52,7 @@ export function Settings() {
       </div>
       <BackupsPanel />
       <Sessions />
-      <Downloads />
+      <Journal />
     </div>
   )
 }
@@ -297,172 +297,6 @@ function Sessions() {
                 ))}
             </tbody>
           </table>
-        </div>
-      )}
-    </section>
-  )
-}
-
-type JournalView = 'clients' | 'recent'
-
-/** Links a file name from the journal to where it lives in the panel. */
-function FileRef({ name, rulesetId, bucket, keyName }: { name: string; rulesetId?: string; bucket?: string; keyName?: string }) {
-  if (rulesetId) return <Link to={`/rulesets/${rulesetId}`}>{name}</Link>
-  if (bucket && keyName) {
-    const dir = keyName.includes('/') ? keyName.slice(0, keyName.lastIndexOf('/') + 1) : ''
-    return <Link to={`/storage/${bucket}${dir ? `?p=${encodeURIComponent(dir)}` : ''}`}>{name}</Link>
-  }
-  return <>{name}</>
-}
-
-function Downloads() {
-  const { toast, confirm } = useOverlay()
-  const journal = useAsync(() => api.get<DownloadJournal>('downloads'), [])
-  const [view, setView] = useState<JournalView>('clients')
-  const ref = useRef<HTMLElement>(null)
-  const { hash } = useLocation()
-  const loaded = !!journal.data
-  useEffect(() => {
-    if (hash === '#downloads' && loaded) ref.current?.scrollIntoView({ block: 'start' })
-  }, [hash, loaded])
-
-  const clear = async () => {
-    const ok = await confirm({
-      title: 'Очистить журнал скачиваний?',
-      body: 'Список клиентов и запросов начнётся заново. Счётчики у наборов и файлов останутся.',
-      confirm: 'Очистить журнал',
-      danger: true,
-    })
-    if (!ok) return
-    try {
-      await api.del('downloads')
-      toast('Журнал очищен')
-      void journal.reload()
-    } catch (e) {
-      toast(errorText(e), 'error')
-    }
-  }
-
-  const d = journal.data
-  const s = d?.summary
-  return (
-    <section className="panel" id="downloads" ref={ref}>
-      <div className="panel-head">
-        <div>
-          <h2>Кто скачивал</h2>
-          <p>
-            {s && s.hits > 0
-              ? `${count(s.hits, ['запрос', 'запроса', 'запросов'])} по публичным ссылкам с ${dateTime(s.since)}`
-              : 'Запросы к ссылкам /r/ и /f/ от клиентов mihomo, браузеров и скриптов'}
-          </p>
-        </div>
-        {s && s.hits > 0 && (
-          <div className="row-flex">
-            <Segmented
-              label="Вид журнала"
-              value={view}
-              onChange={setView}
-              options={[
-                { value: 'clients', label: `Клиенты ${fmtNum(s.clients.length)}` },
-                { value: 'recent', label: 'Последние запросы' },
-              ]}
-            />
-            <Button size="sm" variant="ghost" onClick={clear} icon={<IconTrash size={15} />}>
-              Очистить
-            </Button>
-          </div>
-        )}
-      </div>
-      {journal.error ? (
-        <div className="panel-body">
-          <Notice tone="error">{journal.error.message}</Notice>
-        </div>
-      ) : !d || !s ? (
-        <Loading />
-      ) : s.hits === 0 ? (
-        <div className="panel-body muted">
-          Пока никто не скачивал файлы по ссылкам. Запросы из самой панели сюда не попадают.
-        </div>
-      ) : view === 'clients' ? (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Клиент</th>
-                <th>IP</th>
-                <th>Файлы</th>
-                <th className="num">Скачиваний</th>
-                <th className="num" title="Клиент спросил, нет ли новой версии, и получил ответ «не изменилось»">
-                  Проверок
-                </th>
-                <th>Последний раз</th>
-              </tr>
-            </thead>
-            <tbody>
-              {s.clients.map((c) => (
-                <tr key={c.ip + '\u0000' + c.userAgent}>
-                  <td>
-                    <span className="truncate agent" title={c.userAgent || 'Клиент не прислал User-Agent'}>
-                      {describeAgent(c.userAgent)}
-                    </span>
-                  </td>
-                  <td className="mono nowrap">{c.ip}</td>
-                  <td>
-                    <span className="truncate file-names mono-soft" title={c.files.join('\n')}>
-                      {c.files.join(', ')}
-                      {c.moreFiles > 0 && ` и ещё ${fmtNum(c.moreFiles)}`}
-                    </span>
-                  </td>
-                  <td className="num">{fmtNum(c.downloads)}</td>
-                  <td className="num muted">{c.checks ? fmtNum(c.checks) : '—'}</td>
-                  <td className="muted nowrap" title={`Первый запрос ${dateTime(c.firstAt)}`}>
-                    {relTime(c.lastAt)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Время</th>
-                <th>Файл</th>
-                <th>Клиент</th>
-                <th>IP</th>
-                <th>Ответ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.recent.map((h, i) => (
-                <tr key={h.time + i}>
-                  <td className="muted nowrap">{dateTime(h.time)}</td>
-                  <td className="mono-soft">
-                    <span className="truncate file-names">
-                      <FileRef name={h.name} rulesetId={h.rulesetId} bucket={h.bucket} keyName={h.key} />
-                    </span>
-                  </td>
-                  <td>
-                    <span className="truncate agent" title={h.userAgent || 'Клиент не прислал User-Agent'}>
-                      {describeAgent(h.userAgent)}
-                    </span>
-                  </td>
-                  <td className="mono nowrap">{h.ip}</td>
-                  <td className="muted nowrap">{h.notModified ? 'не изменился' : 'скачал'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {s && s.hits > 0 && (
-        <div className="panel-foot journal-foot">
-          <p className="small muted">
-            Журнал хранит последние {fmtNum(s.keep)} запросов. Всего за это время {count(s.clients.reduce((n, c) => n + c.downloads, 0), DOWNLOADS)} и{' '}
-            {count(s.clients.reduce((n, c) => n + c.checks, 0), CHECKS)}.
-          </p>
         </div>
       )}
     </section>

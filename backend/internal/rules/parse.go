@@ -2,6 +2,7 @@ package rules
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -54,6 +55,29 @@ const maxInvalidSamples = 30
 
 var ErrBinary = errors.New("файл двоичный и не похож на список правил")
 
+// ErrHTML: the link leads to a web page, most often GitHub's page of a file
+// instead of the file itself.
+var ErrHTML = errors.New("по ссылке веб-страница (HTML), а не список правил. Для GitHub откройте файл и возьмите ссылку кнопки Raw: она начинается с raw.githubusercontent.com")
+
+// ErrJSON: a JSON document, e.g. a sing-box rule-set, is not a mihomo list.
+var ErrJSON = errors.New("по ссылке JSON, а не список правил mihomo (похоже на rule-set для sing-box). Нужен текстовый список, YAML с payload: или MRS")
+
+var bom = []byte{0xef, 0xbb, 0xbf}
+
+// looksHTML spots a web page by how it starts.
+func looksHTML(data []byte) bool {
+	h := bytes.ToLower(bytes.TrimSpace(bytes.TrimPrefix(head(data, 8192), bom)))
+	if bytes.HasPrefix(h, []byte("<!doctype html")) || bytes.HasPrefix(h, []byte("<html")) {
+		return true
+	}
+	return bytes.HasPrefix(h, []byte("<")) && (bytes.Contains(h, []byte("<head")) || bytes.Contains(h, []byte("<body")))
+}
+
+func looksJSON(data []byte) bool {
+	t := bytes.TrimSpace(data)
+	return len(t) > 1 && (t[0] == '{' || t[0] == '[') && json.Valid(t)
+}
+
 // Parse reads a rule file in any supported format.
 func Parse(data []byte, opt ParseOptions) (*ParseResult, error) {
 	format := opt.Format
@@ -61,6 +85,14 @@ func Parse(data []byte, opt ParseOptions) (*ParseResult, error) {
 		format = DetectFormat(data)
 	}
 	res := &ParseResult{Format: format, Set: NewSet()}
+	if format != InputMRS {
+		switch {
+		case looksHTML(data):
+			return nil, ErrHTML
+		case looksJSON(data):
+			return nil, ErrJSON
+		}
+	}
 	switch format {
 	case InputMRS:
 		m, err := DecodeMRS(data)

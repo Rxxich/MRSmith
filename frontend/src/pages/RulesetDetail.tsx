@@ -119,7 +119,14 @@ export function RulesetDetail() {
 
       <Temper rs={rs} legend />
 
-      {st.status === 'error' && <Notice tone="error">{st.error}. Клиенты продолжают получать последние собранные файлы.</Notice>}
+      {st.status === 'error' && (
+        <Notice tone="error">
+          {st.error}.{' '}
+          {Object.keys(st.outputs || {}).length > 0
+            ? 'Клиенты продолжают получать последние собранные файлы.'
+            : 'Ссылки на файлы заработают после первой удачной сборки.'}
+        </Notice>
+      )}
       {st.status === 'ok' && st.error && <Notice tone="warn">{st.error}</Notice>}
 
       <div className="pipeline">
@@ -132,7 +139,10 @@ export function RulesetDetail() {
             {rs.sources.map((s) => (
               <div key={s.id} className="src-line" title={s.state.error || undefined}>
                 <StatusDot status={building && s.state.status === 'pending' ? 'running' : s.state.status} />
-                <span className="truncate mono grow">{sourceLabel(s)}</span>
+                <span className="grow src-text">
+                  <span className="truncate mono">{sourceLabel(s)}</span>
+                  {s.state.status === 'error' && s.state.error && <span className="small text-error src-error">{s.state.error}</span>}
+                </span>
                 <span className="muted small nowrap">{s.state.rules ? fmtNum(s.state.rules) : '—'}</span>
               </div>
             ))}

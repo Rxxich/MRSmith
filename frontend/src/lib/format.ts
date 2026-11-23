@@ -19,7 +19,7 @@ export function count(n: number, forms: [string, string, string]): string {
 
 export const RULES: [string, string, string] = ['правило', 'правила', 'правил']
 export const DOWNLOADS: [string, string, string] = ['скачивание', 'скачивания', 'скачиваний']
-export const CHECKS: [string, string, string] = ['проверка', 'проверки', 'проверок']
+export const CHECKS: [string, string, string] = ['проверка обновления', 'проверки обновления', 'проверок обновления']
 
 /** Sums the counters of every published format of a rule set. */
 export function rulesetDownloads(rs: Ruleset): Counter {
@@ -33,7 +33,7 @@ export function rulesetDownloads(rs: Ruleset): Counter {
   return total
 }
 
-/** One line for a counter: "12 скачиваний, 40 проверок". */
+/** One line for a counter: "12 скачиваний, 40 проверок обновления". */
 export function counterText(c?: Counter): string {
   if (!c || (!c.downloads && !c.checks)) return 'ещё не скачивали'
   const parts = [count(c.downloads, DOWNLOADS)]
@@ -41,7 +41,8 @@ export function counterText(c?: Counter): string {
   return parts.join(', ')
 }
 
-const CHECK_HINT = 'Проверка: клиент спросил, нет ли новой версии, и получил ответ «не изменилось» без скачивания файла.'
+const CHECK_HINT =
+  'Проверка обновления: клиент спросил, не изменился ли файл, и получил ответ «не изменился», поэтому скачивать его заново не пришлось.'
 
 export function counterTitle(c?: Counter): string {
   if (!c || (!c.downloads && !c.checks)) return 'По публичной ссылке файл ещё не запрашивали'
