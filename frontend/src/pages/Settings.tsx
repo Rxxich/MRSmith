@@ -8,6 +8,7 @@ import { useAsync, useTitle } from '../lib/hooks'
 import type { DownloadJournal, Integrations, ProxyInfo, SessionInfo } from '../lib/types'
 import { Button, Field, Input, Loading, Notice, Segmented } from '../ui/core'
 import { useOverlay } from '../ui/overlay'
+import { BackupsPanel } from './Backups'
 
 export function Settings() {
   useTitle('Настройки')
@@ -17,7 +18,7 @@ export function Settings() {
       <div className="page-head">
         <div>
           <h1>Настройки</h1>
-          <p>Вход в панель, связь с GitHub и Telegram, активные сессии и кто скачивал файлы.</p>
+          <p>Вход в панель, бэкапы, связь с GitHub и Telegram, активные сессии и кто скачивал файлы.</p>
         </div>
       </div>
       <div className="grid-2">
@@ -49,6 +50,7 @@ export function Settings() {
           <IntegrationsPanel />
         </div>
       </div>
+      <BackupsPanel />
       <Sessions />
       <Downloads />
     </div>

@@ -11,6 +11,11 @@ services:
     env_file: .env
     volumes:
       - mrsmith-data:/data
+      # Backups: the panel writes archives here and restores from them.
+      - ./backup:/backup
+    depends_on:
+      backup-folder:
+        condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
     read_only: true
@@ -24,6 +29,23 @@ services:
       options: { max-size: "10m", max-file: "3" }
     networks:
       - remnawave-network
+
+  # Runs once before the panel and lets it write into ./backup (the panel
+  # itself works as an unprivileged user). Then it exits.
+  backup-folder:
+    image: ghcr.io/rxxich/mrsmith:latest
+    command: ["prepare-backup-dir", "/backup"]
+    user: "0:0"
+    volumes:
+      - ./backup:/backup
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      disable: true
+    restart: "no"
 
 volumes:
   mrsmith-data:

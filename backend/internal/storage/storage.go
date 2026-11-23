@@ -492,6 +492,42 @@ func (s *Service) TotalBytes() (int, int64) {
 	return n, total
 }
 
+// ---- backups ---------------------------------------------------------------
+
+// DecodeObject reads a stored object record, e.g. from a snapshot of the
+// objects table. The result carries its BlobID.
+func DecodeObject(raw []byte) (Object, error) {
+	var r objectRecord
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return Object{}, err
+	}
+	return r.toObject(), nil
+}
+
+// EncodeObject is the stored form of o, pointing at o.BlobID.
+func EncodeObject(o Object) ([]byte, error) {
+	return json.Marshal(objectRecord{Object: o, Blob: o.BlobID})
+}
+
+// OpenBlob opens stored content by its blob ID.
+func (s *Service) OpenBlob(id string) (*os.File, error) {
+	p, err := s.blobPath(id)
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(p)
+}
+
+// WriteBlob stores content that no object points to yet. Attach it with a
+// record made by EncodeObject, or drop it with RemoveBlob.
+func (s *Service) WriteBlob(r io.Reader, limit int64) (id string, size int64, sum string, err error) {
+	id, size, sum, _, err = s.writeBlob(r, limit)
+	return id, size, sum, err
+}
+
+// RemoveBlob deletes stored content by its blob ID.
+func (s *Service) RemoveBlob(id string) { s.removeBlob(id) }
+
 // ---- blobs -----------------------------------------------------------------
 
 func (s *Service) blobPath(id string) (string, error) {

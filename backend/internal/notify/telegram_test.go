@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -123,4 +124,42 @@ func TestQueueDelivers(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("delivered %d of 2", got())
+}
+
+func TestSendFileStreamsMultipart(t *testing.T) {
+	var got struct {
+		chat, caption, mode, name string
+		body                      []byte
+		length                    int64
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bot"+token+"/sendDocument" {
+			http.NotFound(w, r)
+			return
+		}
+		got.length = r.ContentLength
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Error(err)
+		}
+		got.chat, got.caption, got.mode = r.FormValue("chat_id"), r.FormValue("caption"), r.FormValue("parse_mode")
+		f, h, err := r.FormFile("document")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		got.name = h.Filename
+		got.body, _ = io.ReadAll(f)
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+	tg := NewTelegram(token, []int64{42}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	tg.base = srv.URL
+	path := t.TempDir() + "/b.zip"
+	os.WriteFile(path, []byte("PK archive"), 0o600)
+	if err := tg.SendFile(context.Background(), path, "mrsmith-1.zip", "<b>Бэкап</b>"); err != nil {
+		t.Fatal(err)
+	}
+	if got.chat != "42" || got.caption != "<b>Бэкап</b>" || got.mode != "HTML" || got.name != "mrsmith-1.zip" || string(got.body) != "PK archive" || got.length <= 0 {
+		t.Fatalf("got %+v", got)
+	}
 }

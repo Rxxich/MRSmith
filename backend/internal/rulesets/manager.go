@@ -50,6 +50,10 @@ type Manager struct {
 	// decode every set. nil means it must be rebuilt.
 	slugMu sync.RWMutex
 	slugs  map[string]string
+
+	// gate lets a restore swap all sets at once: builds and cleanups hold
+	// it for reading, Pause takes it for writing.
+	gate sync.RWMutex
 }
 
 // OnChange registers fn to run after a rebuild from sources (by schedule or
@@ -267,6 +271,8 @@ func (m *Manager) dropUnusedUploads(candidates []Source) {
 // Cleanup removes stored files nothing refers to any more: downloaded copies
 // left from removed links, and uploads from forms that were never saved.
 func (m *Manager) Cleanup() {
+	m.gate.RLock()
+	defer m.gate.RUnlock()
 	all, err := m.List()
 	if err != nil {
 		return
@@ -594,6 +600,8 @@ func (m *Manager) Refresh(ctx context.Context, id string, forceFetch bool, trigg
 		return nil, nil, ctx.Err()
 	}
 	defer func() { <-m.sem }()
+	m.gate.RLock()
+	defer m.gate.RUnlock()
 
 	l := m.lock(id)
 	l.Lock()

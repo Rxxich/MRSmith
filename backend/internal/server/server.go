@@ -11,6 +11,7 @@ import (
 	"mrsmith/internal/apperr"
 	"mrsmith/internal/audit"
 	"mrsmith/internal/auth"
+	"mrsmith/internal/backup"
 	"mrsmith/internal/config"
 	"mrsmith/internal/downloads"
 	"mrsmith/internal/fetch"
@@ -29,9 +30,11 @@ type Deps struct {
 	// Downloads counts public fetches; Telegram is nil when not configured.
 	Downloads *downloads.Recorder
 	Telegram  *notify.Telegram
-	Log       *slog.Logger
-	Version   string
-	UI        fs.FS
+	// Backups is nil when the build has none (tests).
+	Backups *backup.Service
+	Log     *slog.Logger
+	Version string
+	UI      fs.FS
 	// Ctx bounds background work started by requests; cancel it on shutdown.
 	Ctx context.Context
 }
@@ -45,6 +48,7 @@ type Server struct {
 	fetch   *fetch.Client
 	dl      *downloads.Recorder
 	tg      *notify.Telegram
+	bk      *backup.Service
 	log     *slog.Logger
 	version string
 	bg      context.Context
@@ -56,7 +60,7 @@ type Server struct {
 func New(d Deps) (*Server, error) {
 	s := &Server{
 		cfg: d.Config, auth: d.Auth, rs: d.Rulesets, st: d.Storage, audit: d.Audit, fetch: d.Fetch,
-		dl: d.Downloads, tg: d.Telegram, log: d.Log, version: d.Version, bg: d.Ctx, api: http.NewServeMux(),
+		dl: d.Downloads, tg: d.Telegram, bk: d.Backups, log: d.Log, version: d.Version, bg: d.Ctx, api: http.NewServeMux(),
 	}
 	var err error
 	if s.spa, err = newSPA(d.UI, d.Config.PanelPath); err != nil {
@@ -203,6 +207,14 @@ func (s *Server) routes() {
 	a.HandleFunc("DELETE /api/downloads", s.authed(s.handleClearDownloads))
 	a.HandleFunc("GET /api/integrations", s.authed(s.handleIntegrations))
 	a.HandleFunc("POST /api/integrations/telegram/test", s.authed(s.handleTelegramTest))
+
+	a.HandleFunc("GET /api/backups", s.authed(s.handleBackups))
+	a.HandleFunc("PUT /api/backups/settings", s.authed(s.handleBackupSettings))
+	a.HandleFunc("POST /api/backups", s.authed(s.handleCreateBackup))
+	a.HandleFunc("POST /api/backups/restore", s.authed(s.handleRestoreBackup))
+	a.HandleFunc("POST /api/backups/upload", s.authed(s.handleUploadBackup))
+	a.HandleFunc("GET /api/backups/files/{name}", s.authed(s.handleDownloadBackup))
+	a.HandleFunc("DELETE /api/backups/files/{name}", s.authed(s.handleDeleteBackup))
 
 	a.HandleFunc("GET /api/overview", s.authed(s.handleOverview))
 	a.HandleFunc("GET /api/events", s.authed(s.handleEvents))

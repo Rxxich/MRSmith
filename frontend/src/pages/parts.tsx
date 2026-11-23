@@ -9,6 +9,7 @@ const TRIGGER: Record<string, string> = {
   manual: 'вручную',
   edit: 'после правки',
   create: 'первая сборка',
+  restore: 'после восстановления',
 }
 
 export function EventList({ events, showName }: { events: RulesetEvent[]; showName?: boolean }) {

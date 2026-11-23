@@ -21,6 +21,7 @@ import (
 
 	"mrsmith/internal/audit"
 	"mrsmith/internal/auth"
+	"mrsmith/internal/backup"
 	"mrsmith/internal/config"
 	"mrsmith/internal/downloads"
 	"mrsmith/internal/fetch"
@@ -39,6 +40,8 @@ type env struct {
 	cfg    *config.Config
 	user   string
 	pass   string
+	bk     *backup.Service
+	bkDir  string
 }
 
 func (e *env) creds() map[string]string {
@@ -73,16 +76,19 @@ func newEnv(t *testing.T, panel string) *env {
 	st, _ := storage.New(db, dir, cfg.MaxUploadBytes)
 	f := fetch.New(5*time.Second, cfg.MaxFetchBytes, true, nil, "test")
 	mgr, _ := rulesets.NewManager(db, st, f, dir, cfg.MaxFetchBytes, log)
+	bkDir := t.TempDir()
+	bk := backup.New(context.Background(), backup.Options{Dir: bkDir, Version: "test"}, db, mgr, st, nil, log)
+	t.Cleanup(bk.Wait)
 	ui := fstest.MapFS{"index.html": {Data: []byte(`<html><head><base href="/"></head></html>`)}, "assets/app.js": {Data: []byte("x")}}
 	s, err := New(Deps{Config: cfg, Auth: a, Rulesets: mgr, Storage: st, Fetch: f, Audit: audit.New(mgr, st, cfg.MaxFetchBytes),
-		Downloads: downloads.New(db, mgr, st, log), Log: log, Version: "test", UI: ui, Ctx: context.Background()})
+		Downloads: downloads.New(db, mgr, st, log), Backups: bk, Log: log, Version: "test", UI: ui, Ctx: context.Background()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hs := httptest.NewServer(s)
 	t.Cleanup(hs.Close)
 	jar, _ := cookiejar.New(nil)
-	return &env{t: t, srv: hs, client: &http.Client{Jar: jar}, mgr: mgr, cfg: cfg, user: user, pass: pass}
+	return &env{t: t, srv: hs, client: &http.Client{Jar: jar}, mgr: mgr, cfg: cfg, user: user, pass: pass, bk: bk, bkDir: bkDir}
 }
 
 func (e *env) do(method, path string, body any, headers map[string]string) (*http.Response, []byte) {

@@ -347,3 +347,76 @@ export interface LookupResult {
   checked: number
   hits: LookupHit[]
 }
+
+export type BackupKind = 'auto' | 'manual' | 'before-restore'
+
+/** What an archive holds, read from its manifest.json. */
+export interface BackupManifest {
+  app: string
+  format: number
+  version: string
+  createdAt: string
+  kind: BackupKind
+  server?: string
+  linkBase?: string
+  rulesets: number
+  names?: string[]
+  buckets: number
+  objects: number
+  bytes: number
+  skipped?: number
+}
+
+export interface BackupFile {
+  name: string
+  size: number
+  modTime: string
+  /** Made by the schedule here: removed when there are too many. */
+  auto: boolean
+  /** Made by another panel, e.g. brought over from the old server. */
+  foreign: boolean
+  manifest?: BackupManifest
+  error?: string
+}
+
+export interface BackupRestoreResult {
+  createdAt: string
+  rulesets: number
+  objects: number
+  bytes: number
+  oldBase?: string
+  newBase?: string
+  rebased: number
+  safety?: string
+}
+
+export interface BackupJob {
+  op: 'create' | 'restore'
+  kind?: BackupKind
+  name?: string
+  startedAt: string
+  finishedAt?: string
+  error?: string
+  warning?: string
+  restore?: BackupRestoreResult
+}
+
+export interface BackupSettings {
+  everyHours: number
+  keep: number
+  telegram: boolean
+}
+
+export interface BackupStatus {
+  dir: string
+  ready: boolean
+  problem?: string
+  settings: BackupSettings
+  telegram: boolean
+  lastAutoAt?: string
+  nextAutoAt?: string
+  lastError?: string
+  job: BackupJob | null
+  last: BackupJob | null
+  files: BackupFile[]
+}

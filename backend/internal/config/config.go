@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Listen            string
 	DataDir           string
+	BackupDir         string // archives live here: ./backup next to docker-compose.yml
 	PanelPath         string // where the admin UI and API live, e.g. "/" or "/x7k2m/"
 	PublicURL         string // optional base for generated links, e.g. https://rules.example.com
 	CookieSecure      bool
@@ -46,6 +47,7 @@ func Load() (*Config, error) {
 	c := &Config{
 		Listen:            env("MRSMITH_LISTEN", ":8080"),
 		DataDir:           env("MRSMITH_DATA_DIR", "/data"),
+		BackupDir:         env("MRSMITH_BACKUP_DIR", "/backup"),
 		PanelPath:         env("MRSMITH_PANEL_PATH", "/"),
 		PublicURL:         strings.TrimRight(env("MRSMITH_PUBLIC_URL", ""), "/"),
 		LogLevel:          env("MRSMITH_LOG_LEVEL", "info"),

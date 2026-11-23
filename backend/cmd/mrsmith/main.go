@@ -17,6 +17,7 @@ import (
 
 	"mrsmith/internal/audit"
 	"mrsmith/internal/auth"
+	"mrsmith/internal/backup"
 	"mrsmith/internal/config"
 	"mrsmith/internal/downloads"
 	"mrsmith/internal/fetch"
@@ -41,6 +42,12 @@ func main() {
 		err = serve()
 	case "healthcheck":
 		err = healthcheck()
+	case "prepare-backup-dir":
+		dir := "/backup"
+		if len(os.Args) > 2 {
+			dir = os.Args[2]
+		}
+		prepareBackupDir(dir)
 	case "reset-password":
 		name := ""
 		if len(os.Args) > 2 {
@@ -50,7 +57,7 @@ func main() {
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
 	default:
-		err = fmt.Errorf("неизвестная команда %q; доступны: serve, healthcheck, reset-password, version", cmd)
+		err = fmt.Errorf("неизвестная команда %q; доступны: serve, healthcheck, reset-password, prepare-backup-dir, version", cmd)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mrsmith:", err)
@@ -151,10 +158,23 @@ func serve() error {
 	dl := downloads.New(db, mgr, st, log)
 	go dl.Run(ctx)
 
+	var tgFiles backup.Telegram
+	if tg != nil {
+		tgFiles = tg
+	}
+	bk := backup.New(ctx, backup.Options{Dir: cfg.BackupDir, PublicURL: cfg.PublicURL, Version: version.Version, TelegramMax: notify.MaxFile},
+		db, mgr, st, tgFiles, log)
+	if st := bk.Status(); st.Ready {
+		log.Info("бэкапы сохраняются в папку", "dir", cfg.BackupDir, "files", len(st.Files))
+	} else {
+		log.Info("папка для бэкапов не готова", "dir", cfg.BackupDir, "problem", st.Problem)
+	}
+	go bk.Run(ctx)
+
 	srv, err := server.New(server.Deps{
 		Config: cfg, Auth: authSvc, Rulesets: mgr, Storage: st, Fetch: fetcher,
 		Audit:     audit.New(mgr, st, cfg.MaxFetchBytes),
-		Downloads: dl, Telegram: tg,
+		Downloads: dl, Telegram: tg, Backups: bk,
 		Log: log, Version: version.Version, UI: webui.FS(), Ctx: ctx,
 	})
 	if err != nil {

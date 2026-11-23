@@ -2,6 +2,7 @@ node_modules/
 frontend/dist/
 backend/internal/webui/dist/
 .localdata/
+/backup/
 .env
 .env.local
 *.exe

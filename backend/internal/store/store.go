@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -356,6 +357,63 @@ func (d *DB) PutMany(table []byte, items map[string]any) error {
 		for k, raw := range enc {
 			if err := b.Put([]byte(k), raw); err != nil {
 				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ReadTables calls fn for every record of the given tables inside one read
+// transaction, so together they form a consistent snapshot. raw is only
+// valid during the call.
+func (d *DB) ReadTables(tables [][]byte, fn func(table []byte, key string, raw []byte) error) error {
+	return d.db.View(func(tx *bolt.Tx) error {
+		for _, t := range tables {
+			if err := tx.Bucket(t).ForEach(func(k, v []byte) error { return fn(t, string(k), v) }); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// Record is a key with its encoded value.
+type Record struct {
+	Key string
+	Raw []byte
+}
+
+// ReplaceTables empties each table named in data and fills it with the given
+// records, all in one transaction. dropped, when set, sees every record
+// removed on the way; its raw is only valid during the call.
+func (d *DB) ReplaceTables(data map[string][]Record, dropped func(table, key string, raw []byte)) error {
+	for name := range data {
+		if !slices.ContainsFunc(allTables, func(t []byte) bool { return string(t) == name }) {
+			return errors.New("unknown table " + name)
+		}
+	}
+	return d.db.Update(func(tx *bolt.Tx) error {
+		for name, recs := range data {
+			t := []byte(name)
+			if dropped != nil {
+				if err := tx.Bucket(t).ForEach(func(k, v []byte) error {
+					dropped(name, string(k), v)
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
+			if err := tx.DeleteBucket(t); err != nil {
+				return err
+			}
+			b, err := tx.CreateBucket(t)
+			if err != nil {
+				return err
+			}
+			for _, r := range recs {
+				if err := b.Put([]byte(r.Key), r.Raw); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
